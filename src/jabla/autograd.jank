@@ -1,0 +1,51 @@
+(ns jabla.autograd)
+
+;; ============================================================================
+;; Scalar reverse-mode autograd.
+;; Modeled on karpathy/micrograd  ->  reference/micrograd/micrograd/engine.py
+;;
+;; Not implemented — this file sketches the API and the one design decision the
+;; immutable-value host forces.
+;; ============================================================================
+
+;; ---------------------------------------------------------------------------
+;; The micrograd `Value` model (engine.py):
+;;   - data : scalar
+;;   - grad : accumulated gradient (mutated in place during backward)
+;;   - _prev: set of child Values that produced this one
+;;   - _op  : label of the producing op (debug/graphviz)
+;;   - _backward: a closure that pushes this node's grad into its children
+;;
+;; backward(): topo-sort the graph, set the root's grad = 1, walk in reverse
+;; calling each node's _backward. Grads ACCUMULATE (+=) so a value used twice
+;; is handled correctly.
+;;
+;; Ops: + * pow relu  (and derived: neg sub div).
+;; ---------------------------------------------------------------------------
+
+;; ---------------------------------------------------------------------------
+;; Mutation strategy — micrograd mutates `grad` on a plain object; Clojure/jank
+;; values are immutable, so pick one:
+;;
+;;   (a) deftype with ^:mutable fields  — closest to micrograd, fast.
+;;   (b) atoms (grad as (atom 0.0))     — idiomatic, thread-safe, boxier.
+;;   (c) a single tape/graph in one atom — nodes are pure data; all mutable
+;;       state lives in one tape folded over in backward. Scales best toward
+;;       the tensor and trace work; also the shape jabla.trace wants.
+;; ---------------------------------------------------------------------------
+
+;; Suggested public surface (names, not impls):
+;;
+;; (defn value [data] ...)            ; construct a leaf
+;; (defn add [a b] ...)               ; a + b, records graph + local backward
+;; (defn mul [a b] ...)               ; a * b
+;; (defn pow* [a n] ...)              ; a ** n  (n a constant)
+;; (defn relu [a] ...)
+;; (defn neg [a]) (defn sub [a b]) (defn div [a b])   ; derived
+;; (defn backward! [root] ...)        ; topo-sort, seed grad 1.0, reverse-walk
+;; (defn data [v]) (defn grad [v])    ; accessors
+;;
+;; Validation: reference/micrograd/test/test_engine.py checks grads against
+;; PyTorch — reproduce those numbers in test/jabla/autograd_test.jank.
+
+;; TODO: implement.

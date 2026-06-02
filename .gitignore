@@ -1,0 +1,31 @@
+# jank / build artifacts
+target/
+classes/
+*.o
+*.so
+*.dylib
+*.ll
+*.bc
+/jabla            # AOT-compiled executable
+
+# Clojure CLI
+.cpcache/
+.clj-kondo/.cache/
+
+# datasets (downloaded, never committed — see reference/README.md)
+/data/*
+!/data/.gitkeep
+
+# experiment outputs (loss curves, logs) — keep the dir, ignore contents
+/experiments/*
+!/experiments/.gitkeep
+
+# local-only notes (never published)
+/private/
+
+# editor / OS
+.DS_Store
+*.swp
+.idea/
+.vscode/
+.nrepl-port

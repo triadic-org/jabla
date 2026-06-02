@@ -1,0 +1,34 @@
+(ns jabla.trace)
+
+;; ============================================================================
+;; Eligibility traces with event-driven lazy decay.
+;;
+;; A field of synapses, each carrying a trace that decays over time, driven by a
+;; sparse spike stream. No GPU. Models continuously-evolving local state that a
+;; synchronous-batch tensor framework expresses awkwardly; Clojure's concurrency
+;; primitives (atoms/agents/STM/core.async) map onto it directly.
+;;
+;; Not implemented — design notes only.
+;; ============================================================================
+
+;; The mechanism — event-driven lazy decay:
+;;   Each synapse stores (trace-value, last-update-tick). Apply
+;;   λ^(now - last-update) ONLY when a synapse is touched by a spike, instead of
+;;   a dense per-tick sweep. Sparse and SDR-friendly.
+;;
+;;     decayed = trace * (pow lambda (- now last-update))
+;;
+;; Suggested surface (names, not impls):
+;;
+;; (defn synapse-field [n] ...)          ; n synapses, each {:trace 0.0 :t 0}
+;; (defn touch [field i now lambda] ...) ; lazy-decay synapse i to `now`
+;; (defn potentiate [field i now dw] ...); decay-then-add (a spike deposits trace)
+;; (defn drive [field spike-stream lambda] ...) ; fold a sparse spike stream through
+;;
+;; Lineage to anchor against: eligibility traces; e-prop (Bellec et al.);
+;; three-factor learning rules; STDP with trace variables; SDR.
+;;
+;; Note: online updates have no batch parallelism to hide host latency — measure
+;; expressiveness and throughput separately.
+
+;; TODO: implement.

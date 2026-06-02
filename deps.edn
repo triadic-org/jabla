@@ -1,0 +1,18 @@
+;; deps.edn — jank uses the Clojure CLI ONLY to compute --module-path.
+;;
+;; jank's CLI takes `--module-path`, which (per the jank clojure-cli docs) is
+;; calculated by `clojure -Spath`. With no external deps yet, the module path
+;; is just "src" (+ "test" under the :test alias), so the Makefile defaults to
+;; MODULE_PATH=src:test and you don't need the Clojure CLI / a JDK installed to
+;; start. Add real deps below and run `make module-path` once you do.
+;;
+;; NOTE: most JVM Clojure libs won't load under jank (host is LLVM/C++, interop
+;; is C++ not Java). This file is for jank-compatible / pure-Clojure deps and
+;; local subprojects. Native numeric work goes through cpp/ interop (see cpp/).
+
+{:paths ["src"]
+
+ :deps {}
+
+ :aliases
+ {:test {:extra-paths ["test"]}}}

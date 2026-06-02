@@ -1,0 +1,12 @@
+(ns jabla.core)
+
+;; jabla — an ML library in jank (Clojure on LLVM/C++).
+;;
+;; Entry point. -main is a smoke target so `make run` does something before
+;; the rest of the library exists. See docs/roadmap.md for module order.
+
+(defn -main
+  "Entry point. Wired to `make run` (jank ... run-main jabla.core)."
+  [& args]
+  (println "jabla — ∇ on jank. Nothing wired up yet.")
+  (println "Args:" (vec args)))

@@ -1,0 +1,16 @@
+(ns jabla.test-runner
+  (:require [jabla.test-harness :as t]
+            [jabla.autograd-test :as autograd-test]))
+
+;; The substitute for `clojure.test`'s runner. Add each test ns's `run` fn here.
+;; Invoked by `make test` -> jank ... run-main jabla.test-runner.
+
+(defn -main [& _]
+  (t/reset!)
+  (autograd-test/run)
+  ;; (other-test/run) ...
+  (let [ok? (t/summary!)]
+    ;; jank's process exit story is young; print a clear marker the Makefile/CI
+    ;; can grep. Swap for a real (System/exit ...) equivalent once you confirm
+    ;; the idiom for your jank version.
+    (println (if ok? "RESULT: PASS" "RESULT: FAIL"))))

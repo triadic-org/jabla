@@ -1,0 +1,21 @@
+(ns jabla.autograd-test
+  (:require [jabla.test-harness :as t]
+            [jabla.autograd :as ag]))
+
+;; Example test for jabla.autograd. The asserted numbers should match
+;; reference/micrograd/test/test_engine.py (which checks grads against PyTorch).
+;;
+;; Commented out until autograd.jank is implemented — uncomment and adjust as
+;; the ops land.
+
+(defn run []
+  (t/deftest "scalar autograd vs micrograd ground truth"
+    ;; (let [a (ag/value -4.0)
+    ;;       b (ag/value 2.0)
+    ;;       c (ag/add a b)
+    ;;       d (ag/mul a b)]
+    ;;   (ag/backward! d)
+    ;;   ;; d = a*b  ->  da = b = 2.0,  db = a = -4.0
+    ;;   (t/approx= 2.0  (ag/grad a) 1e-9)
+    ;;   (t/approx= -4.0 (ag/grad b) 1e-9))
+    (t/check true "placeholder — replace with real assertions once ops land")))

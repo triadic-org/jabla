@@ -1,0 +1,52 @@
+(ns jabla.test-harness)
+
+;; Hand-rolled assertions. jank has no user-facing test framework yet, so this
+;; is the substitute — a few macros/fns that track pass/fail counts in an atom
+;; and print a summary. Deliberately tiny; grow it as you need.
+;;
+;; Usage (see jabla.autograd-test for a real example):
+;;   (deftest "value add grad"
+;;     (is= 1.0 (grad-of ...))
+;;     (approx= 0.7071 (some-float) 1e-4))
+;;   (summary!)   ; prints totals, returns nonzero-ish info for the runner
+
+(def ^:private state (atom {:pass 0 :fail 0 :failures []}))
+
+(defn reset! [] (reset! state {:pass 0 :fail 0 :failures []}))
+
+(defn- record! [ok? msg]
+  (if ok?
+    (swap! state update :pass inc)
+    (swap! state #(-> % (update :fail inc) (update :failures conj msg)))))
+
+(defn check
+  "Core assertion. ok? is a boolean; msg describes the case."
+  [ok? msg]
+  (record! ok? msg)
+  (when-not ok? (println "  FAIL:" msg))
+  ok?)
+
+(defn is=
+  "Assert (= expected actual)."
+  [expected actual]
+  (check (= expected actual)
+         (str "expected " (pr-str expected) " got " (pr-str actual))))
+
+(defn approx=
+  "Assert |a - b| <= tol. For float comparisons against PyTorch/Python ground truth."
+  [expected actual tol]
+  (check (<= (abs (- (double expected) (double actual))) (double tol))
+         (str "expected ~" expected " (±" tol ") got " actual)))
+
+(defmacro deftest
+  "Group assertions under a name; prints the name then the body's checks."
+  [name & body]
+  `(do (println "TEST:" ~name)
+       ~@body))
+
+(defn summary!
+  "Print totals. Returns true iff everything passed (runner uses this)."
+  []
+  (let [{:keys [pass fail]} @state]
+    (println (str "\n=== " pass " passed, " fail " failed ==="))
+    (zero? fail)))

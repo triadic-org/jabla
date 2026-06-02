@@ -1,0 +1,27 @@
+(ns jabla.tensor)
+
+;; ============================================================================
+;; Tensors with autograd, on native BLAS. Lifts jabla.autograd from scalars to
+;; arrays. References: reference/makemore/ and reference/nanoGPT/model.py
+;;
+;; Depends on a working BLAS/cuBLAS sgemm through cpp/ interop (see cpp/README.md).
+;;
+;; Not implemented — design notes only.
+;; ============================================================================
+
+;; Open questions to resolve here:
+;;
+;;   - Storage: a flat native buffer (cpp/-allocated float*) + shape/stride
+;;     metadata in a jank map/record, vs. backing onto a C++ tensor type via the
+;;     interop type DSL. The former keeps the Clojure side in control; the
+;;     latter leans on C++ but couples to a library's layout.
+;;   - Autograd reuse: the tape/graph design from jabla.autograd should extend
+;;     to tensor ops — each op records its local vjp. The single-tape strategy
+;;     scales best here.
+;;   - Ops for a GPT: matmul, add/broadcast, softmax, layernorm, gelu, embedding
+;;     lookup, cross-entropy. Start with matmul (the sgemm).
+;;   - Numerical validation: match one attention block to PyTorch element-wise
+;;     before trusting the stack; nanoGPT's loss-per-step curve on TinyShakespeare
+;;     is the end-to-end check (log to experiments/).
+
+;; TODO: implement after the sgemm probe lands.
