@@ -1,51 +1,185 @@
 (ns jabla.autograd)
 
 ;; ============================================================================
-;; Scalar reverse-mode autograd.
-;; Modeled on karpathy/micrograd  ->  reference/micrograd/micrograd/engine.py
+;; Scalar reverse-mode autograd. Tape design.
+;; Modeled on karpathy/micrograd -> reference/micrograd/micrograd/engine.py
+;; Design rationale + perf path: docs/autograd-references.md (flat-tape, then
+;; delegate the hot loop to cpp/ later). Validate against the frozen oracle
+;; numbers already sitting in test/jabla/autograd_test.jank.
 ;;
-;; Not implemented - this file sketches the API and the one design decision the
-;; immutable-value host forces.
+;; The model: one tape. :nodes is a vector; a node's index in that vector IS its
+;; id (this is the "atom-counter" idea, except the counter is the tape length and
+;; the id doubles as the storage slot). Ops append in evaluation order, so the
+;; tape is already topologically sorted. Every input has a lower index than the
+;; op that consumes it, and backward is a plain reverse scan, no DFS topo-sort.
+;; :grads is the parallel gradient array, recomputed from scratch by backward.
 ;; ============================================================================
 
-;; ---------------------------------------------------------------------------
-;; The micrograd `Value` model (engine.py):
-;;   - data : scalar
-;;   - grad : accumulated gradient (mutated in place during backward)
-;;   - _prev: set of child Values that produced this one
-;;   - _op  : label of the producing op (debug/graphviz)
-;;   - _backward: a closure that pushes this node's grad into its children
-;;
-;; backward(): topo-sort the graph, set the root's grad = 1, walk in reverse
-;; calling each node's _backward. Grads ACCUMULATE (+=) so a value used twice
-;; is handled correctly.
-;;
-;; Ops: + * pow relu  (and derived: neg sub div).
-;; ---------------------------------------------------------------------------
+(def ^:private tape (atom {:nodes [] :grads []}))
+
+(defn reset-tape!
+  "Clear the tape. Call at the start of each test so graphs don't bleed."
+  []
+  (reset! tape {:nodes [] :grads []}))
 
 ;; ---------------------------------------------------------------------------
-;; Mutation strategy - micrograd mutates `grad` on a plain object; Clojure/jank
-;; values are immutable, so pick one:
-;;
-;;   (a) deftype with ^:mutable fields  - closest to micrograd, fast.
-;;   (b) atoms (grad as (atom 0.0))     - idiomatic, thread-safe, boxier.
-;;   (c) a single tape/graph in one atom - nodes are pure data; all mutable
-;;       state lives in one tape folded over in backward. Scales best toward
-;;       the tensor and trace work; also the shape jabla.trace wants.
+;; Handles. A handle is a thin wrapper {:ref idx} around a tape index. We wrap
+;; (rather than pass the bare int) so a handle is distinguishable from a raw
+;; numeric constant in op args -- (mul 2 x) must tell the constant 2 from a node
+;; id. Identity still comes from the index, not object identity; the map is just
+;; a typed pointer.
 ;; ---------------------------------------------------------------------------
 
-;; Suggested public surface (names, not impls):
-;;
-;; (defn value [data] ...)            ; construct a leaf
-;; (defn add [a b] ...)               ; a + b, records graph + local backward
-;; (defn mul [a b] ...)               ; a * b
-;; (defn pow* [a n] ...)              ; a ** n  (n a constant)
-;; (defn relu [a] ...)
-;; (defn neg [a]) (defn sub [a b]) (defn div [a b])   ; derived
-;; (defn backward! [root] ...)        ; topo-sort, seed grad 1.0, reverse-walk
-;; (defn data [v]) (defn grad [v])    ; accessors
-;;
-;; Validation: reference/micrograd/test/test_engine.py checks grads against
-;; PyTorch - reproduce those numbers in test/jabla/autograd_test.jank.
+(defn- push-node!
+  "Append node, return its handle."
+  [node]
+  (let [idx (count (:nodes @tape))]
+    (swap! tape update :nodes conj node)
+    {:ref idx}))
 
-;; TODO: implement.
+(defn value
+  "Construct a leaf."
+  [d]
+  (push-node! {:data (double d), :op :leaf, :inputs []}))
+
+(defn- ->ref
+  "Coerce: a handle passes through; a raw number becomes a leaf (micrograd's
+  __radd__/__rmul__ constant-coercion)."
+  [x]
+  (if (map? x) x (value x)))
+
+(defn data
+  "Forward value of a handle."
+  [h]
+  (get-in @tape [:nodes (:ref h) :data]))
+
+(defn grad
+  "Accumulated gradient of a handle (0.0 before backward!)."
+  [h]
+  (get (:grads @tape) (:ref h) 0.0))
+
+;; ---------------------------------------------------------------------------
+;; Small helper: integer power without host Math interop (jank is C++, not JVM,
+;; so no Math/pow). Handles the exponents the tests use: 3, 2, and -1, plus the
+;; -2 that pow's derivative needs.
+;; ---------------------------------------------------------------------------
+
+(defn- ipow
+  [base n]
+  (cond
+    (zero? n) 1.0
+    (pos? n)  (reduce * 1.0 (repeat n base))
+    :else     (/ 1.0 (reduce * 1.0 (repeat (- n) base)))))
+
+;; ===========================================================================
+;; Ops: forward construction. Each op coerces its args, computes the forward
+;; value, and records {:data :op :inputs ...}. The backward rule for each op
+;; lives in `local-grads` below.
+;; ===========================================================================
+
+;; ---- WORKED EXAMPLE: add. Use this as the template for the rest. ----
+(defn add [x y]
+  (let [a (->ref x)
+        b (->ref y)]
+    (push-node! {:data   (+ (data a) (data b))
+                 :op     :add
+                 :inputs [(:ref a) (:ref b)]})))
+
+(defn mul [x y]
+  (let [a (->ref x)
+        b (->ref y)]
+    (push-node! {:data (* (data a) (data b))
+                 :op :mul
+                 :inputs [(:ref a) (:ref b)]})))
+
+;; TODO(you): pow*. One value input + a constant integer exponent n. Store n on
+;; the node so the backward rule can read it. forward = (ipow (data a) n).
+;; Node shape: {:data .. :op :pow :inputs [(:ref a)] :n n}
+(defn pow* [x n]
+  (let [a (->ref x)]
+    (push-node! {:data (ipow (data a) n)
+                 :op :pow
+                 :inputs [(:ref a) :n n]})))
+
+;; TODO(you): relu. One input. forward = (max 0.0 (data a)).
+(defn relu [x]
+  (let [a (->ref x)]
+    (push-node! {:data (max 0.0 (data a))
+                :op :relu
+                :inputs [(:ref a)]})))
+
+;; ---- Derived ops: pure composition, NO new calculus. The chain rule flows
+;; ---- through the primitives above for free, so these need no local-grads.
+;; TODO(you): neg = mul by -1 ; sub = a + (neg b) ; div = a * (pow* b -1)
+(defn neg [x]
+  (let [a (->ref x)]
+    (push-node! {:data (* (data a) -1)
+                 :op :neg
+                 :inputs [(:ref a)]})))
+
+(defn sub [x y]
+  (let [a (->ref x)
+        b (->ref y)]
+    (push-node! {:data (add a (neg b))
+                 :op :sub
+                 :inputs [(:ref a) (:ref b)]})))
+
+(defn div [x y]
+  (let [a (->ref x)
+        b (->ref y)]
+    (push-node! {:data (mul a (ipow b -1))})))
+
+;; ===========================================================================
+;; Local gradients. local-grads returns {input-index local-partial}, i.e.
+;; d(this node's output) w.r.t. each input, IGNORING the upstream grad. backward!
+;; multiplies in the upstream grad (the chain rule) and accumulates. Keeping the
+;; two apart is the whole point: this is just calculus, backward! is just
+;; bookkeeping.
+;; ===========================================================================
+
+(defn- local-grads
+  [node nodes]
+  (let [ins (:inputs node)]
+    (case (:op node)
+      :leaf {}
+
+      ;; WORKED EXAMPLE: out = a + b  ->  d out/d a = 1, d out/d b = 1
+      :add (let [[a b] ins] {a 1.0 b 1.0})
+
+      ;; TODO(you): out = a * b. Read an input's value with (:data (nth nodes i)).
+      ;; :mul ...
+
+      ;; TODO(you): out = a^n, with n = (:n node). Power rule (ipow may help).
+      ;; :pow ...
+
+      ;; TODO(you): out = relu(a). Gradient flows only where the unit is active;
+      ;; the forward value is already on the node as (:data node).
+      ;; :relu ...
+
+      (throw (ex-info "local-grads: no rule for op" {:op (:op node)})))))
+
+;; ===========================================================================
+;; Backward. Reverse scan over the tape. Because every input has a lower index
+;; than the op consuming it, walking high->low means a node's own grad is fully
+;; accumulated before we use it to push grads onto its inputs. Recomputed from
+;; scratch each call -> idempotent, no zero_grad footgun.
+;; ===========================================================================
+
+(defn backward! [root]
+  (let [nodes (:nodes @tape)
+        n     (count nodes)
+        seed  (assoc (vec (repeat n 0.0)) (:ref root) 1.0)
+        grads (reduce
+                (fn [gr idx]
+                  (let [g (nth gr idx)]
+                    (reduce
+                      (fn [gr2 entry]
+                        (let [in-idx  (first entry)
+                              partial (second entry)]
+                          (assoc gr2 in-idx (+ (nth gr2 in-idx) (* g partial)))))
+                      gr
+                      (local-grads (nth nodes idx) nodes))))
+                seed
+                (range (dec n) -1 -1))]
+    (swap! tape assoc :grads grads)
+    root))
