@@ -160,7 +160,7 @@
       ;; TODO(you): out = relu(a). Gradient flows only where the unit is active;
       ;; the forward value is already on the node as (:data node).
       :relu (let [[a] ins] {a (let [val (get-node-data nodes a)]
-                                (if (> val 0) 1 0)})
+                                (if (> val 0) 1 0))})
 
       (throw (ex-info "local-grads: no rule for op" {:op (:op node)})))))
 
