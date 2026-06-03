@@ -15,6 +15,11 @@ the implementation is at fault.
 `src/jabla/trace.jank` (eligibility traces) is an independent track, not part of
 the GPT order above.
 
+Ground truth lives in `reference/`: micrograd (step 1, grads vs PyTorch), llm.c's
+`train_gpt2.c` (steps 2-5, manual per-layer forward+backward), llama2.c's `run.c`
+(clean forward pass). When iterating on the autograd/tensor engine itself, see
+`docs/autograd-references.md` (fast-tape design + LLVM/C++ AD frameworks).
+
 ## Measurement
 Always log, for each shape: tokens/sec and step time; the **host (wall-clock) vs
 device (CUDA-event) split** (separates jank-runtime cost from implementation
