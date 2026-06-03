@@ -1,17 +1,24 @@
 (ns jabla.test-runner
-  (:require [jabla.test-harness :as t]
-            [jabla.autograd-test :as autograd-test]
-            [jabla.blas-test :as blas-test]))
+  (:require [clojure.test :as test]
+            [jabla.autograd-test]
+            [jabla.blas-test]))
 
-;; The substitute for `clojure.test`'s runner. Add each test ns's `run` fn here.
-;; Invoked by `make test` -> jank ... run-main jabla.test-runner.
+;; Runs the suites via clojure.test. Invoked by `make test` ->
+;; jank ... run-main jabla.test-runner [suite].
+;;   no arg          -> run all suites
+;;   <suite-name>    -> run just that one (e.g. `make test SUITE=autograd`)
 
-(defn -main [& _]
-  (t/clear!)
-  (autograd-test/run)
-  (blas-test/run)
-  (let [ok? (t/summary!)]
-    ;; jank's process exit story is young; print a clear marker the Makefile/CI
-    ;; can grep. Swap for a real (System/exit ...) equivalent once you confirm
-    ;; the idiom for your jank version.
-    (println (if ok? "RESULT: PASS" "RESULT: FAIL"))))
+(def ^:private suites
+  {"autograd" 'jabla.autograd-test
+   "blas"     'jabla.blas-test})
+
+(defn -main [& args]
+  (let [names     (filter seq args)                        ; ignore blank/""
+        namespaces (if (seq names) (keep suites names) (vals suites))
+        summary    (apply test/run-tests namespaces)
+        ok?        (and (zero? (:fail summary)) (zero? (:error summary)))]
+    (println (if ok? "RESULT: PASS" "RESULT: FAIL"))
+    ;; Fail the process on failures/errors so `make test` exits non-zero (CI).
+    ;; jank exits 1 on an uncaught throw; there's no System/exit equivalent yet.
+    (when-not ok?
+      (throw (ex-info "tests failed" (select-keys summary [:fail :error]))))))

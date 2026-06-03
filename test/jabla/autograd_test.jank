@@ -1,174 +1,154 @@
 (ns jabla.autograd-test
-  (:require [jabla.test-harness :as t]
-            [jabla.autograd :as ag]))
+  (:require [clojure.test :refer [deftest is testing use-fixtures]]
+            [jabla.autograd :as ag]
+            [jabla.test-util :refer [approx? grad-check]]))
 
-;; --- Test layers (narrowest to broadest) ---
-;;   unit-gradients : one named test per primitive op (exact, hand-derived).
-;;   compositions   : the derived ops (neg/sub/div) built on the primitives.
-;;   integration    : numerical gradient checking over arbitrary expressions --
-;;                    the micrograd-test spirit, generalized.
-;;   sanity-check   : one exact oracle anchor (micrograd test_sanity_check) --
-;;                    readable, and catches errors below grad-check's tolerance.
-;;
-;; The tape is reset before every test by the before-each hook set in run.
+;; Layers: unit (per-op exact) -> compositions (neg/sub/div) -> integration
+;; (numerical grad-check over arbitrary exprs) -> one exact oracle anchor.
+;; Float comparisons go through approx?; the tape is reset before each test.
+;; (jank doesn't capture deftest var names in failures, so the human label lives
+;; in each (testing "...") block.)
 
-;; --- Unit gradients ---
-;; One primitive op per test, exact answers. A failure pinpoints a single op's
-;; forward value or local gradient.
-(defn unit-gradients []
+(use-fixtures :each (fn [run-test] (ag/reset-tape!) (run-test)))
 
-  (t/deftest "add (distinct inputs)"           ; d(a+b)/da = 1, d(a+b)/db = 1
+;; --- Unit gradients (one primitive op per test, exact) ---
+
+(deftest add-grad
+  (testing "add (distinct inputs): d(a+b)/da = 1, d/db = 1"
     (let [a (ag/push-leaf! 3.0) b (ag/push-leaf! 5.0) y (ag/add a b)]
       (ag/backward! y)
-      (t/approx= 8.0 (ag/get-data y) 1e-9)
-      (t/approx= 1.0 (ag/get-grad a) 1e-9)
-      (t/approx= 1.0 (ag/get-grad b) 1e-9)))
+      (is (approx? 8.0 (ag/get-data y) 1e-9))
+      (is (approx? 1.0 (ag/get-grad a) 1e-9))
+      (is (approx? 1.0 (ag/get-grad b) 1e-9)))))
 
-  (t/deftest "add (same node twice)"           ; y = x + x = 2x -> dy/dx = 2
+(deftest add-same-node
+  (testing "add (same node twice): y = x + x = 2x -> dy/dx = 2"
     (let [x (ag/push-leaf! 3.0) y (ag/add x x)]
       (ag/backward! y)
-      (t/approx= 6.0 (ag/get-data y) 1e-9)
-      (t/approx= 2.0 (ag/get-grad x) 1e-9)))
+      (is (approx? 6.0 (ag/get-data y) 1e-9))
+      (is (approx? 2.0 (ag/get-grad x) 1e-9)))))
 
-  (t/deftest "mul (distinct inputs)"           ; d(a*b)/da = b, d(a*b)/db = a
+(deftest mul-grad
+  (testing "mul (distinct inputs): d(a*b)/da = b, d/db = a"
     (let [a (ag/push-leaf! 3.0) b (ag/push-leaf! 5.0) y (ag/mul a b)]
       (ag/backward! y)
-      (t/approx= 15.0 (ag/get-data y) 1e-9)
-      (t/approx= 5.0 (ag/get-grad a) 1e-9)
-      (t/approx= 3.0 (ag/get-grad b) 1e-9)))
+      (is (approx? 15.0 (ag/get-data y) 1e-9))
+      (is (approx? 5.0 (ag/get-grad a) 1e-9))
+      (is (approx? 3.0 (ag/get-grad b) 1e-9)))))
 
-  (t/deftest "mul (same node)"                 ; y = x*x -> dy/dx = 2x
+(deftest mul-same-node
+  (testing "mul (same node): y = x*x -> dy/dx = 2x"
     (let [x (ag/push-leaf! 3.0) y (ag/mul x x)]
       (ag/backward! y)
-      (t/approx= 9.0 (ag/get-data y) 1e-9)
-      (t/approx= 6.0 (ag/get-grad x) 1e-9)))
+      (is (approx? 9.0 (ag/get-data y) 1e-9))
+      (is (approx? 6.0 (ag/get-grad x) 1e-9)))))
 
-  (t/deftest "relu (active, x > 0)"            ; relu(3) = 3, d/dx = 1
+(deftest relu-active
+  (testing "relu (active, x > 0): relu(3) = 3, d/dx = 1"
     (let [x (ag/push-leaf! 3.0) y (ag/relu x)]
       (ag/backward! y)
-      (t/approx= 3.0 (ag/get-data y) 1e-9)
-      (t/approx= 1.0 (ag/get-grad x) 1e-9)))
+      (is (approx? 3.0 (ag/get-data y) 1e-9))
+      (is (approx? 1.0 (ag/get-grad x) 1e-9)))))
 
-  (t/deftest "relu (inactive, x < 0)"          ; relu(-3) = 0, d/dx = 0
+(deftest relu-inactive
+  (testing "relu (inactive, x < 0): relu(-3) = 0, d/dx = 0"
     (let [x (ag/push-leaf! -3.0) y (ag/relu x)]
       (ag/backward! y)
-      (t/approx= 0.0 (ag/get-data y) 1e-9)
-      (t/approx= 0.0 (ag/get-grad x) 1e-9)))
+      (is (approx? 0.0 (ag/get-data y) 1e-9))
+      (is (approx? 0.0 (ag/get-grad x) 1e-9)))))
 
-  (t/deftest "pow* (x^2 -> 2x)"                ; d(x^2)/dx = 2x = 6
+(deftest pow-square
+  (testing "pow* (x^2 -> 2x): d(x^2)/dx = 2x = 6"
     (let [x (ag/push-leaf! 3.0) y (ag/pow* x 2)]
       (ag/backward! y)
-      (t/approx= 9.0 (ag/get-data y) 1e-9)
-      (t/approx= 6.0 (ag/get-grad x) 1e-9)))
+      (is (approx? 9.0 (ag/get-data y) 1e-9))
+      (is (approx? 6.0 (ag/get-grad x) 1e-9)))))
 
-  (t/deftest "pow* (x^3 -> 3x^2)"             ; d(x^3)/dx = 3x^2 = 12
+(deftest pow-cube
+  (testing "pow* (x^3 -> 3x^2): d(x^3)/dx = 3x^2 = 12"
     (let [x (ag/push-leaf! 2.0) y (ag/pow* x 3)]
       (ag/backward! y)
-      (t/approx= 8.0 (ag/get-data y) 1e-9)
-      (t/approx= 12.0 (ag/get-grad x) 1e-9)))
+      (is (approx? 8.0 (ag/get-data y) 1e-9))
+      (is (approx? 12.0 (ag/get-grad x) 1e-9)))))
 
-  (t/deftest "pow* (1/x -> -1/x^2)"           ; d(x^-1)/dx = -1/x^2 = -0.0625
+(deftest pow-inverse
+  (testing "pow* (1/x -> -1/x^2): d(x^-1)/dx = -1/x^2 = -0.0625"
     (let [x (ag/push-leaf! 4.0) y (ag/pow* x -1)]
       (ag/backward! y)
-      (t/approx= 0.25 (ag/get-data y) 1e-9)
-      (t/approx= -0.0625 (ag/get-grad x) 1e-9)))
+      (is (approx? 0.25 (ag/get-data y) 1e-9))
+      (is (approx? -0.0625 (ag/get-grad x) 1e-9)))))
 
-  (t/deftest "constant coercion (2 * x)"       ; raw number becomes a leaf, dy/dx = 2
+(deftest constant-coercion
+  (testing "constant coercion (2 * x): raw number becomes a leaf, dy/dx = 2"
     (let [x (ag/push-leaf! 4.0) y (ag/mul 2 x)]
       (ag/backward! y)
-      (t/approx= 8.0 (ag/get-data y) 1e-9)
-      (t/approx= 2.0 (ag/get-grad x) 1e-9))))
+      (is (approx? 8.0 (ag/get-data y) 1e-9))
+      (is (approx? 2.0 (ag/get-grad x) 1e-9)))))
 
-;; --- Compositions ---
-;; Derived ops are built on the primitives, so backward flows through them for
-;; free. These verify the composition (no bespoke calculus).
-(defn compositions []
+;; --- Compositions (derived ops built on primitives) ---
 
-  (t/deftest "neg (-x -> -1)"
+(deftest neg-grad
+  (testing "neg (-x -> -1)"
     (let [x (ag/push-leaf! 3.0) y (ag/neg x)]
       (ag/backward! y)
-      (t/approx= -3.0 (ag/get-data y) 1e-9)
-      (t/approx= -1.0 (ag/get-grad x) 1e-9)))
+      (is (approx? -3.0 (ag/get-data y) 1e-9))
+      (is (approx? -1.0 (ag/get-grad x) 1e-9)))))
 
-  (t/deftest "sub (a - b -> 1, -1)"
+(deftest sub-grad
+  (testing "sub (a - b -> 1, -1)"
     (let [a (ag/push-leaf! 7.0) b (ag/push-leaf! 4.0) y (ag/sub a b)]
       (ag/backward! y)
-      (t/approx= 3.0 (ag/get-data y) 1e-9)
-      (t/approx= 1.0 (ag/get-grad a) 1e-9)
-      (t/approx= -1.0 (ag/get-grad b) 1e-9)))
+      (is (approx? 3.0 (ag/get-data y) 1e-9))
+      (is (approx? 1.0 (ag/get-grad a) 1e-9))
+      (is (approx? -1.0 (ag/get-grad b) 1e-9)))))
 
-  (t/deftest "div (a / b -> 1/b, -a/b^2)"
+(deftest div-grad
+  (testing "div (a / b -> 1/b, -a/b^2)"
     (let [a (ag/push-leaf! 6.0) b (ag/push-leaf! 2.0) y (ag/div a b)]
       (ag/backward! y)
-      (t/approx= 3.0 (ag/get-data y) 1e-9)
-      (t/approx= 0.5 (ag/get-grad a) 1e-9)
-      (t/approx= -1.5 (ag/get-grad b) 1e-9))))
+      (is (approx? 3.0 (ag/get-data y) 1e-9))
+      (is (approx? 0.5 (ag/get-grad a) 1e-9))
+      (is (approx? -1.5 (ag/get-grad b) 1e-9)))))
 
-;; --- Integration: numerical gradient checking ---
-;; The generalized micrograd test: verify backward!'s analytic gradient against a
-;; central finite difference, for ANY expression -- no frozen oracle constants.
-;; Tolerance is relative + absolute so it holds for tiny and large gradients.
-(defn- grad-check
-  "build : (fn [vector-of-values] -> output-value). inputs : vector of scalars.
-  Asserts each input's analytic grad ~ its central finite difference."
-  [build inputs]
-  (ag/reset-tape!)
-  (let [input-values    (mapv ag/push-leaf! inputs)
-        output          (build input-values)
-        _               (ag/backward! output)
-        analytic-grads  (mapv ag/get-grad input-values)
-        h               1e-6
-        output-at       (fn [scalars] (ag/reset-tape!) (ag/get-data (build (mapv ag/push-leaf! scalars))))
-        numerical-grads (vec (map-indexed
-                             (fn [index _]
-                               (let [bumped (fn [delta]
-                                              (output-at (assoc inputs index (+ (nth inputs index) delta))))]
-                                 (/ (- (bumped h) (bumped (- h))) (* 2.0 h))))
-                             inputs))]
-    (doseq [index (range (count inputs))]
-      (let [analytic  (nth analytic-grads index)
-            numerical (nth numerical-grads index)
-            tol       (+ 1e-6 (* 1e-4 (abs analytic)))]
-        (t/approx= analytic numerical tol)))))
+;; --- Integration: numerical gradient checking over arbitrary expressions ---
 
-(defn integration []
+(deftest grad-check-square
+  (testing "grad-check: x*x"
+    (is (grad-check (fn [[x]] (ag/mul x x)) [3.0]))))
 
-  (t/deftest "grad-check: x*x"
-    (grad-check (fn [[x]] (ag/mul x x)) [3.0]))
+(deftest grad-check-relu-poly
+  (testing "grad-check: relu(x*x) + 2x"
+    (is (grad-check (fn [[x]] (ag/add (ag/relu (ag/mul x x)) (ag/mul 2 x))) [-1.5]))))
 
-  (t/deftest "grad-check: relu(x*x) + 2x"
-    (grad-check (fn [[x]] (ag/add (ag/relu (ag/mul x x)) (ag/mul 2 x))) [-1.5]))
+(deftest grad-check-div-mul
+  (testing "grad-check: a/b + a*b"
+    (is (grad-check (fn [[a b]] (ag/add (ag/div a b) (ag/mul a b))) [3.0 5.0]))))
 
-  (t/deftest "grad-check: a/b + a*b"
-    (grad-check (fn [[a b]] (ag/add (ag/div a b) (ag/mul a b))) [3.0 5.0]))
+(deftest grad-check-sub-square
+  (testing "grad-check: (a - b)^2"
+    (is (grad-check (fn [[a b]] (ag/pow* (ag/sub a b) 2)) [7.0 4.0]))))
 
-  (t/deftest "grad-check: (a - b)^2"
-    (grad-check (fn [[a b]] (ag/pow* (ag/sub a b) 2)) [7.0 4.0]))
+(deftest grad-check-more-ops
+  (testing "grad-check: full micrograd test_more_ops expression (all ops + reuse)"
+    (is (grad-check
+         (fn [[a b]]
+           (let [c (ag/add a b)
+                 d (ag/add (ag/mul a b) (ag/pow* b 3))
+                 c (ag/add c (ag/add c 1))
+                 c (ag/add c (ag/add (ag/add 1 c) (ag/neg a)))
+                 d (ag/add d (ag/add (ag/mul d 2) (ag/relu (ag/add b a))))
+                 d (ag/add d (ag/add (ag/mul 3 d) (ag/relu (ag/sub b a))))
+                 e (ag/sub c d)
+                 f (ag/pow* e 2)
+                 g (ag/div f 2.0)
+                 g (ag/add g (ag/div 10.0 f))]
+             g))
+         [-4.0 2.0]))))
 
-  ;; The full micrograd test_more_ops expression, verified numerically instead of
-  ;; against frozen constants -- same coverage (all ops + heavy node reuse + both
-  ;; relu branches), nothing brittle to maintain.
-  (t/deftest "grad-check: test_more_ops expression"
-    (grad-check
-     (fn [[a b]]
-       (let [c (ag/add a b)
-             d (ag/add (ag/mul a b) (ag/pow* b 3))
-             c (ag/add c (ag/add c 1))
-             c (ag/add c (ag/add (ag/add 1 c) (ag/neg a)))
-             d (ag/add d (ag/add (ag/mul d 2) (ag/relu (ag/add b a))))
-             d (ag/add d (ag/add (ag/mul 3 d) (ag/relu (ag/sub b a))))
-             e (ag/sub c d)
-             f (ag/pow* e 2)
-             g (ag/div f 2.0)
-             g (ag/add g (ag/div 10.0 f))]
-         g))
-     [-4.0 2.0])))
+;; --- Exact oracle anchor (micrograd test_sanity_check) ---
 
-;; --- Sanity check (exact oracle anchor) ---
-;; micrograd test_sanity_check: readable worked example on primitives, and an
-;; exact check that catches errors below grad-check's finite-difference tolerance.
-(defn sanity-check []
-  (t/deftest "sanity check (vs micrograd test_sanity_check)"
+(deftest sanity-check
+  (testing "sanity check vs micrograd test_sanity_check"
     ;; x = -4;  z = 2x + 2 + x;  q = relu(z) + z*x;  h = relu(z*z);  y = h + q + q*x
     (let [x (ag/push-leaf! -4.0)
           z (ag/add (ag/add (ag/mul 2 x) (ag/push-leaf! 2)) x)
@@ -176,12 +156,5 @@
           h (ag/relu (ag/mul z z))
           y (ag/add (ag/add h q) (ag/mul q x))]
       (ag/backward! y)
-      (t/approx= -20.0 (ag/get-data y) 1e-6)     ; forward
-      (t/approx=  46.0 (ag/get-grad x) 1e-6))))  ; backward
-
-(defn run []
-  (t/before-each! ag/reset-tape!)
-  (unit-gradients)
-  (compositions)
-  (integration)
-  (sanity-check))
+      (is (approx? -20.0 (ag/get-data y) 1e-6))   ; forward
+      (is (approx? 46.0 (ag/get-grad x) 1e-6))))) ; backward

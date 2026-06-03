@@ -1,0 +1,35 @@
+(ns jabla.test-util
+  (:require [jabla.autograd :as ag]))
+
+;; Domain test helpers for the autograd engine. (clojure.test is the framework;
+;; this is just jabla-specific assertions, used inside clojure.test's `is`.)
+
+(defn approx?
+  "True when |expected - actual| <= tol. clojure.test has no float-tolerance
+  assertion, so use as (is (approx? expected actual tol))."
+  [expected actual tol]
+  (<= (abs (- (double expected) (double actual))) (double tol)))
+
+(defn grad-check
+  "Numerical gradient check: backward!'s analytic gradient vs a central finite
+  difference, for any expression. `build` takes a vector of values and returns the
+  output value; `inputs` is the vector of input scalars. Returns true iff every
+  input's analytic grad matches its finite difference within a relative+absolute
+  tolerance. Use as (is (grad-check build inputs))."
+  [build inputs]
+  (ag/reset-tape!)
+  (let [input-values    (mapv ag/push-leaf! inputs)
+        output          (build input-values)
+        _               (ag/backward! output)
+        analytic-grads  (mapv ag/get-grad input-values)
+        h               1e-6
+        output-at       (fn [scalars] (ag/reset-tape!) (ag/get-data (build (mapv ag/push-leaf! scalars))))
+        numerical-grads (vec (map-indexed
+                             (fn [index _]
+                               (let [bumped (fn [delta]
+                                              (output-at (assoc inputs index (+ (nth inputs index) delta))))]
+                                 (/ (- (bumped h) (bumped (- h))) (* 2.0 h))))
+                             inputs))]
+    (every? (fn [[analytic numerical]]
+              (<= (abs (- analytic numerical)) (+ 1e-6 (* 1e-4 (abs analytic)))))
+            (map vector analytic-grads numerical-grads))))

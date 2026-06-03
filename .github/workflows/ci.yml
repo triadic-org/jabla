@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    # jank needs C++20 / a recent libstdc++; per the jank docs, 22.04 will NOT
+    # work. The PPA supports 24.04 / 24.10 / 25.04.
+    runs-on: ubuntu-24.04
+    env:
+      DEBIAN_FRONTEND: noninteractive   # avoid debconf prompts during apt installs
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install jank (PPA) + clj-kondo
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl gnupg
+          # jank from the official PPA (bundles LLVM 22 -- this step is the slow one)
+          curl -s "https://ppa.jank-lang.org/KEY.gpg" | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/jank.gpg >/dev/null
+          sudo curl -s -o /etc/apt/sources.list.d/jank.list "https://ppa.jank-lang.org/jank.list"
+          sudo apt-get update
+          sudo apt-get install -y jank
+          # clj-kondo native binary (no JVM) for `make lint`
+          curl -sLO https://raw.githubusercontent.com/clj-kondo/clj-kondo/master/script/install-clj-kondo
+          chmod +x install-clj-kondo
+          sudo ./install-clj-kondo --dir /usr/local/bin
+
+      - name: Health check
+        run: make health
+
+      - name: Lint
+        run: make lint
+
+      - name: Test
+        run: make test

@@ -12,7 +12,7 @@ language and one REPL.
 ## Layout
 ```
 src/jabla/      autograd.jank · tensor.jank · trace.jank · core.jank
-test/jabla/     hand-rolled test harness + runner (jank has no test framework yet)
+test/jabla/     tests (clojure.test, which loads under jank) + test-util helpers
 cpp/            C++ for BLAS/cuBLAS interop
 reference/      reference implementations (vendored)
 docs/           roadmap and tooling notes
