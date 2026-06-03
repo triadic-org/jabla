@@ -2,20 +2,50 @@
   (:require [jabla.test-harness :as t]
             [jabla.autograd :as ag]))
 
-;; Example test for jabla.autograd. The asserted numbers should match
-;; reference/micrograd/test/test_engine.py (which checks grads against PyTorch).
+;; Mirrors reference/micrograd/test/test_engine.py. Python compares against a
+;; live PyTorch run; we have no torch in-process, so the expected numbers below
+;; are the frozen torch/micrograd oracle (they agree exactly) - assert jabla
+;; matches them within tol.
 ;;
-;; Commented out until autograd.jank is implemented - uncomment and adjust as
-;; the ops land.
+;; Bodies are commented until jabla.autograd lands. Uncomment as ops land.
+;; The named-fn graph stands in for Python's operator overloading; add/mul/etc.
+;; must coerce raw numbers to leaves (micrograd's __radd__/__rmul__/...).
 
-(defn run []
-  (t/deftest "scalar autograd vs micrograd ground truth"
+(defn sanity-check []
+  (t/deftest "sanity check (vs micrograd test_sanity_check)"
+    ;; x = -4;  z = 2x + 2 + x;  q = relu(z) + z*x;  h = relu(z*z);  y = h + q + q*x
+    ;; (let [x (ag/value -4.0)
+    ;;       z (ag/add (ag/add (ag/mul 2 x) (ag/value 2)) x)
+    ;;       q (ag/add (ag/relu z) (ag/mul z x))
+    ;;       h (ag/relu (ag/mul z z))
+    ;;       y (ag/add (ag/add h q) (ag/mul q x))]
+    ;;   (ag/backward! y)
+    ;;   (t/approx= -20.0 (ag/data y) 1e-6)     ; forward
+    ;;   (t/approx=  46.0 (ag/grad x) 1e-6))    ; backward
+    (t/check true "placeholder - uncomment once ops land")))
+
+(defn more-ops []
+  (t/deftest "more ops (vs micrograd test_more_ops)"
+    ;; Stresses constant-coerced reverse ops, node reuse / grad accumulation,
+    ;; and both relu branches (relu(b+a)=relu(-2)=0 dead, relu(b-a)=relu(6)=6 live).
     ;; (let [a (ag/value -4.0)
     ;;       b (ag/value 2.0)
     ;;       c (ag/add a b)
-    ;;       d (ag/mul a b)]
-    ;;   (ag/backward! d)
-    ;;   ;; d = a*b  ->  da = b = 2.0,  db = a = -4.0
-    ;;   (t/approx= 2.0  (ag/grad a) 1e-9)
-    ;;   (t/approx= -4.0 (ag/grad b) 1e-9))
-    (t/check true "placeholder - replace with real assertions once ops land")))
+    ;;       d (ag/add (ag/mul a b) (ag/pow* b 3))
+    ;;       c (ag/add c (ag/add c 1))                                  ; c += c + 1
+    ;;       c (ag/add c (ag/add (ag/add 1 c) (ag/neg a)))              ; c += 1 + c + (-a)
+    ;;       d (ag/add d (ag/add (ag/mul d 2) (ag/relu (ag/add b a))))  ; d += d*2 + relu(b+a)
+    ;;       d (ag/add d (ag/add (ag/mul 3 d) (ag/relu (ag/sub b a))))  ; d += 3*d + relu(b-a)
+    ;;       e (ag/sub c d)
+    ;;       f (ag/pow* e 2)
+    ;;       g (ag/div f 2.0)
+    ;;       g (ag/add g (ag/div 10.0 f))]                              ; g += 10.0 / f
+    ;;   (ag/backward! g)
+    ;;   (t/approx=  24.70408163265306 (ag/data g) 1e-6)   ; forward
+    ;;   (t/approx= 138.83381924198252 (ag/grad a) 1e-6)   ; d g / d a
+    ;;   (t/approx= 645.5772594752186  (ag/grad b) 1e-6))  ; d g / d b
+    (t/check true "placeholder - uncomment once ops land")))
+
+(defn run []
+  (sanity-check)
+  (more-ops))

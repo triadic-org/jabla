@@ -14,7 +14,7 @@ TEST_RUNNER ?= jabla.test-runner
 # and pass the result: `make repl MODULE_PATH="$(make -s module-path)"`.
 MODULE_PATH ?= src:test
 
-.PHONY: help repl run test compile clean module-path check-jank check-clojure doctor health
+.PHONY: help repl run test compile clean module-path check-jank check-clojure doctor health lint-ascii
 
 help:
 	@echo "jabla targets:"
@@ -25,6 +25,7 @@ help:
 	@echo "  make module-path  Print the Clojure-CLI-computed module path (needs clojure + JDK)"
 	@echo "  make doctor       Report which tools are installed"
 	@echo "  make health       Run 'jank check-health' (jank's own install diagnostic)"
+	@echo "  make lint-ascii   Fail if any .jank source has non-ASCII bytes (lexer limitation)"
 	@echo "  make clean        Remove build artifacts"
 	@echo ""
 	@echo "  Override vars: JANK=, CLOJURE=, MAIN_NS=, MODULE_PATH="
@@ -40,11 +41,21 @@ check-clojure:
 repl: check-jank
 	$(JANK) --module-path $(MODULE_PATH) repl
 
-run: check-jank
+run: lint-ascii check-jank
 	$(JANK) --module-path $(MODULE_PATH) run-main $(MAIN_NS)
 
-test: check-jank
+test: lint-ascii check-jank
 	$(JANK) --module-path $(MODULE_PATH) run-main $(TEST_RUNNER)
+
+# jank's lexer (0.1-alpha) rejects non-ASCII bytes even inside comments/strings.
+# Portable guard (works with GNU and BSD grep — no -P): flag any byte outside
+# printable ASCII in .jank sources before they reach the compiler.
+lint-ascii:
+	@if LC_ALL=C grep -rn '[^ -~]' src test --include='*.jank' >/dev/null 2>&1; then \
+	  echo ">> non-ASCII found in .jank sources (jank's lexer rejects it):"; \
+	  LC_ALL=C grep -rn '[^ -~]' src test --include='*.jank'; \
+	  exit 1; \
+	fi
 
 # AOT — jank can emit statically/dynamically linked executables. `compile-module`
 # AOT-compiles a namespace + its deps; `jank compile` builds a project whose
