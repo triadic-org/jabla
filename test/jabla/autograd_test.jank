@@ -7,22 +7,21 @@
 ;; are the frozen torch/micrograd oracle (they agree exactly) - assert jabla
 ;; matches them within tol.
 ;;
+;; The tape is reset before every test by the before-each hook set in `run`, so
+;; individual tests don't repeat (ag/reset-tape!).
+;;
 ;; Layout, most-granular first:
 ;;   unit-gradients : one named test per op (minimal graph, hand-derived oracle).
-;;                    A failure names the exact op + case.
 ;;   sanity-check   : micrograd test_sanity_check (composed graph).
-;;   more-ops       : micrograd test_more_ops (commented until the ops land).
-;;   derived-ops    : pow*/neg/sub/div probes (commented; for the more-ops stage).
+;;   more-ops       : micrograd test_more_ops (pending until the ops land).
+;;   derived-ops    : one pending test per op (pow*/neg/sub/div).
 
 ;; ---------------------------------------------------------------------------
 ;; Unit gradients. One deftest per behavior so each failure is self-identifying.
-;; Distinct-input cases pass once add/mul forward + local grads are right; the
-;; same-input and relu cases target the subtle spots.
 ;; ---------------------------------------------------------------------------
 (defn unit-gradients []
 
   (t/deftest "add (distinct inputs)"           ; d(a+b)/da = 1, d(a+b)/db = 1
-    (ag/reset-tape!)
     (let [a (ag/value 3.0) b (ag/value 5.0) y (ag/add a b)]
       (ag/backward! y)
       (t/approx= 8.0 (ag/data y) 1e-9)
@@ -30,14 +29,12 @@
       (t/approx= 1.0 (ag/grad b) 1e-9)))
 
   (t/deftest "add (same node twice)"           ; y = x + x = 2x -> dy/dx = 2
-    (ag/reset-tape!)
     (let [x (ag/value 3.0) y (ag/add x x)]
       (ag/backward! y)
       (t/approx= 6.0 (ag/data y) 1e-9)
       (t/approx= 2.0 (ag/grad x) 1e-9)))
 
   (t/deftest "mul (distinct inputs)"           ; d(a*b)/da = b, d(a*b)/db = a
-    (ag/reset-tape!)
     (let [a (ag/value 3.0) b (ag/value 5.0) y (ag/mul a b)]
       (ag/backward! y)
       (t/approx= 15.0 (ag/data y) 1e-9)
@@ -45,28 +42,24 @@
       (t/approx= 3.0 (ag/grad b) 1e-9)))
 
   (t/deftest "mul (same node)"                 ; y = x*x -> dy/dx = 2x (the z*z case)
-    (ag/reset-tape!)
     (let [x (ag/value 3.0) y (ag/mul x x)]
       (ag/backward! y)
       (t/approx= 9.0 (ag/data y) 1e-9)
       (t/approx= 6.0 (ag/grad x) 1e-9)))
 
   (t/deftest "relu (active, x > 0)"            ; relu(3) = 3, d/dx = 1
-    (ag/reset-tape!)
     (let [x (ag/value 3.0) y (ag/relu x)]
       (ag/backward! y)
       (t/approx= 3.0 (ag/data y) 1e-9)
       (t/approx= 1.0 (ag/grad x) 1e-9)))
 
   (t/deftest "relu (inactive, x < 0)"          ; relu(-3) = 0, d/dx = 0
-    (ag/reset-tape!)
     (let [x (ag/value -3.0) y (ag/relu x)]
       (ag/backward! y)
       (t/approx= 0.0 (ag/data y) 1e-9)
       (t/approx= 0.0 (ag/grad x) 1e-9)))
 
   (t/deftest "constant coercion (2 * x)"       ; raw number becomes a leaf, dy/dx = 2
-    (ag/reset-tape!)
     (let [x (ag/value 4.0) y (ag/mul 2 x)]
       (ag/backward! y)
       (t/approx= 8.0 (ag/data y) 1e-9)
@@ -75,7 +68,6 @@
 (defn sanity-check []
   (t/deftest "sanity check (vs micrograd test_sanity_check)"
     ;; x = -4;  z = 2x + 2 + x;  q = relu(z) + z*x;  h = relu(z*z);  y = h + q + q*x
-    (ag/reset-tape!)
     (let [x (ag/value -4.0)
           z (ag/add (ag/add (ag/mul 2 x) (ag/value 2)) x)
           q (ag/add (ag/relu z) (ag/mul z x))
@@ -89,7 +81,6 @@
   (t/deftest "more ops (vs micrograd test_more_ops)"
     ;; Stresses constant-coerced reverse ops, node reuse / grad accumulation,
     ;; and both relu branches (relu(b+a)=relu(-2)=0 dead, relu(b-a)=relu(6)=6 live).
-    ;; (ag/reset-tape!)
     ;; (let [a (ag/value -4.0)
     ;;       b (ag/value 2.0)
     ;;       c (ag/add a b)
@@ -106,32 +97,44 @@
     ;;   (t/approx=  24.70408163265306 (ag/data g) 1e-6)   ; forward
     ;;   (t/approx= 138.83381924198252 (ag/grad a) 1e-6)   ; d g / d a
     ;;   (t/approx= 645.5772594752186  (ag/grad b) 1e-6))  ; d g / d b
-    (t/check true "placeholder - uncomment once ops land")))
+    (t/pending "uncomment once pow*/neg/sub/div land")))
 
+;; ---------------------------------------------------------------------------
+;; Derived ops. One pending test per op. As you implement an op (ideally as a
+;; composition so backward flows through the primitives), uncomment its probe
+;; and drop the (t/pending ...) line.
+;; ---------------------------------------------------------------------------
 (defn derived-ops []
-  (t/deftest "derived ops (pow*/neg/sub/div; for the more-ops stage)"
-    ;; Uncomment as you implement them. Ideally neg/sub/div are compositions of
-    ;; add/mul/pow* so the chain rule flows through the primitives for free.
-    ;; (ag/reset-tape!)                                          ; y = x^2, dy/dx = 2x = 6
+
+  (t/deftest "pow* (x^2 -> 2x)"
     ;; (let [x (ag/value 3.0) y (ag/pow* x 2)]
     ;;   (ag/backward! y) (t/approx= 9.0 (ag/data y) 1e-9) (t/approx= 6.0 (ag/grad x) 1e-9))
-    ;; (ag/reset-tape!)                                          ; y = 1/x, dy/dx = -1/x^2
+    (t/pending "implement the :pow backward rule"))
+
+  (t/deftest "pow* (1/x -> -1/x^2)"
     ;; (let [x (ag/value 4.0) y (ag/pow* x -1)]
     ;;   (ag/backward! y) (t/approx= 0.25 (ag/data y) 1e-9) (t/approx= -0.0625 (ag/grad x) 1e-9))
-    ;; (ag/reset-tape!)                                          ; y = -x, dy/dx = -1
+    (t/pending "implement the :pow backward rule"))
+
+  (t/deftest "neg (-x -> -1)"
     ;; (let [x (ag/value 3.0) y (ag/neg x)]
     ;;   (ag/backward! y) (t/approx= -3.0 (ag/data y) 1e-9) (t/approx= -1.0 (ag/grad x) 1e-9))
-    ;; (ag/reset-tape!)                                          ; y = a-b, da=1, db=-1
+    (t/pending "make neg a composition (mul by -1)"))
+
+  (t/deftest "sub (a-b -> 1, -1)"
     ;; (let [a (ag/value 7.0) b (ag/value 4.0) y (ag/sub a b)]
     ;;   (ag/backward! y) (t/approx= 3.0 (ag/data y) 1e-9)
     ;;   (t/approx= 1.0 (ag/grad a) 1e-9) (t/approx= -1.0 (ag/grad b) 1e-9))
-    ;; (ag/reset-tape!)                                          ; y = a/b = 3, da=1/b=0.5, db=-a/b^2=-1.5
+    (t/pending "make sub a composition (a + neg b)"))
+
+  (t/deftest "div (a/b -> 1/b, -a/b^2)"
     ;; (let [a (ag/value 6.0) b (ag/value 2.0) y (ag/div a b)]
     ;;   (ag/backward! y) (t/approx= 3.0 (ag/data y) 1e-9)
     ;;   (t/approx= 0.5 (ag/grad a) 1e-9) (t/approx= -1.5 (ag/grad b) 1e-9))
-    (t/check true "placeholder - uncomment derived-op probes as you implement them")))
+    (t/pending "make div a composition (a * pow* b -1)")))
 
 (defn run []
+  (t/before-each! (fn [] (ag/reset-tape!)))
   (unit-gradients)
   (sanity-check)
   (more-ops)

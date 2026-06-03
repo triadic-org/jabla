@@ -1,29 +1,47 @@
 (ns jabla.test-harness)
 
-;; Hand-rolled assertions. jank has no user-facing test framework yet, so this
-;; is the substitute - a few macros/fns that track pass/fail counts in an atom
-;; and print a summary. Deliberately tiny; grow it as you need.
+;; Hand-rolled test harness. jank has no test framework yet, so this is the
+;; substitute. It tracks pass/fail/pending counts, names each failing test, and
+;; supports a before-each setup hook so tests don't repeat their fixtures.
 ;;
-;; Usage (see jabla.autograd-test for a real example):
-;;   (deftest "value add grad"
-;;     (is= 1.0 (grad-of ...))
-;;     (approx= 0.7071 (some-float) 1e-4))
-;;   (summary!)   ; prints totals, returns nonzero-ish info for the runner
+;; Usage (see jabla.autograd-test):
+;;   (before-each! (fn [] (ag/reset-tape!)))   ; runs before every deftest
+;;   (deftest "x + x"
+;;     (approx= 6.0 (some-value) 1e-9))
+;;   (summary!)  ; prints which tests failed + totals; returns true iff all passed
 
-(def ^:private state (atom {:pass 0 :fail 0 :failures []}))
+(def ^:private initial-state
+  {:pass 0 :fail 0 :pending 0 :failures [] :failed-tests #{}
+   :current nil :before-each nil})
 
-(defn clear! [] (reset! state {:pass 0 :fail 0 :failures []}))
+(def ^:private state (atom initial-state))
 
-(defn- record! [ok? msg]
+(defn clear! [] (reset! state initial-state))
+
+(defn before-each!
+  "Register a thunk to run before each deftest body (e.g. reset shared state).
+  Scoped per suite: set it at the top of your test ns's run fn; clear! removes it."
+  [thunk]
+  (swap! state assoc :before-each thunk))
+
+;; -- internals the deftest macro calls (public so they resolve in test nses) --
+(defn set-current-test! [test-name] (swap! state assoc :current test-name))
+(defn run-before-each! [] (when-let [thunk (:before-each @state)] (thunk)))
+
+(defn- record! [ok? message]
   (if ok?
     (swap! state update :pass inc)
-    (swap! state #(-> % (update :fail inc) (update :failures conj msg)))))
+    (let [test-name (:current @state)]
+      (swap! state #(-> %
+                        (update :fail inc)
+                        (update :failures conj (str test-name ": " message))
+                        (update :failed-tests conj test-name)))
+      (println "  FAIL:" message))))
 
 (defn check
-  "Core assertion. ok? is a boolean; msg describes the case."
-  [ok? msg]
-  (record! ok? msg)
-  (when-not ok? (println "  FAIL:" msg))
+  "Core assertion. ok? is a boolean; message describes the case."
+  [ok? message]
+  (record! ok? message)
   ok?)
 
 (defn is=
@@ -33,20 +51,33 @@
          (str "expected " (pr-str expected) " got " (pr-str actual))))
 
 (defn approx=
-  "Assert |a - b| <= tol. For float comparisons against PyTorch/Python ground truth."
+  "Assert |expected - actual| <= tol. For floats vs PyTorch/Python ground truth."
   [expected actual tol]
   (check (<= (abs (- (double expected) (double actual))) (double tol))
          (str "expected ~" expected " (+/-" tol ") got " actual)))
 
+(defn pending
+  "Mark a test (or branch) as not-yet-implemented. Counts separately; never fails."
+  [message]
+  (swap! state update :pending inc)
+  (println "  PENDING:" message))
+
 (defmacro deftest
-  "Group assertions under a name; prints the name then the body's checks."
-  [name & body]
-  `(do (println "TEST:" ~name)
+  "Run a named test: print its name, run the before-each hook, then the body."
+  [test-name & body]
+  `(do (println "TEST:" ~test-name)
+       (jabla.test-harness/set-current-test! ~test-name)
+       (jabla.test-harness/run-before-each!)
        ~@body))
 
 (defn summary!
-  "Print totals. Returns true iff everything passed (runner uses this)."
+  "Print which tests failed plus pass/fail/pending totals. Returns true iff there
+  were no failures (pending does not count as a failure)."
   []
-  (let [{:keys [pass fail]} @state]
-    (println (str "\n=== " pass " passed, " fail " failed ==="))
+  (let [{:keys [pass fail pending failed-tests]} @state]
+    (when (seq failed-tests)
+      (println "\nFailed:")
+      (doseq [test-name failed-tests]
+        (println "  -" test-name)))
+    (println (str "\n=== " pass " passed, " fail " failed, " pending " pending ==="))
     (zero? fail)))
