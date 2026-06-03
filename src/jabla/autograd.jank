@@ -1,19 +1,18 @@
 (ns jabla.autograd)
 
-;; ============================================================================
-;; Scalar reverse-mode autograd. Tape design.
-;; Modeled on karpathy/micrograd -> reference/micrograd/micrograd/engine.py
-;; Design rationale + perf path: docs/autograd-references.md (flat-tape, then
-;; delegate the hot loop to cpp/ later). Validate against the frozen oracle
-;; numbers already sitting in test/jabla/autograd_test.jank.
+;; --- The tape model ---
+;; Scalar reverse-mode autograd, modeled on karpathy/micrograd
+;; (reference/micrograd/micrograd/engine.py). Design rationale + perf path:
+;; docs/autograd-references.md (flat-tape, then delegate the hot loop to cpp/).
+;; Validated by test/jabla/autograd_test.jank (unit grads, grad-check, and a
+;; micrograd oracle anchor).
 ;;
-;; The model: one tape. :nodes is a vector; a node's index in :nodes is its id
-;; and its storage slot, so the tape length doubles as the id counter (no
-;; separate id state). Ops append in evaluation order, so the
-;; tape is already topologically sorted. Every input has a lower index than the
-;; op that consumes it, and backward is a plain reverse scan, no DFS topo-sort.
-;; :grads is the parallel gradient array, recomputed from scratch by backward.
-;; ============================================================================
+;; One tape. :nodes is a vector; a node's index in :nodes is its id and its
+;; storage slot, so the tape length doubles as the id counter (no separate id
+;; state). Ops append in evaluation order, so the tape is already topologically
+;; sorted: every input has a lower index than the op that consumes it, and
+;; backward is a plain reverse scan (no DFS topo-sort). :grads is the parallel
+;; gradient array, recomputed from scratch by backward!.
 
 (def ^:private tape (atom {:nodes [] :grads []}))
 
@@ -22,14 +21,11 @@
   []
   (reset! tape {:nodes [] :grads []}))
 
-;; ---------------------------------------------------------------------------
-;; Values. A "value" is the thing user code holds and ops return: a thin wrapper
-;; {:id index} around a tape index. We wrap (rather than pass the bare int) so a
-;; value is distinguishable from a raw numeric constant in op args -- (mul 2 x)
-;; must tell the constant 2 from a node id. Identity comes from the index, not
-;; object identity; the map is just a typed pointer. (Mirrors micrograd: a
-;; `value` is the object you hold, :data is its scalar.)
-;; ---------------------------------------------------------------------------
+;; --- Values ---
+;; A "value" is what user code holds and ops return: a thin wrapper {:id index}
+;; around a tape index. Wrapping (vs a bare int) lets an op tell a value from a
+;; raw numeric constant -- (mul 2 x) must distinguish the constant 2 from a node
+;; id. Identity is the index, not object identity; the map is just a typed pointer.
 
 (defn- push-node!
   "Append a node to the tape; return a value referencing it."
@@ -38,32 +34,29 @@
     (swap! tape update :nodes conj node)
     {:id index}))
 
-(defn value
-  "Construct a leaf value."
+(defn push-value!
+  "Push a leaf value (a constant or input) onto the tape; return it."
   [scalar]
   (push-node! {:data (double scalar), :op :leaf, :inputs []}))
 
 (defn- ->value
-  "Coerce to a value: an existing value passes through; a raw number becomes a
-  leaf (micrograd's __radd__/__rmul__ constant coercion)."
+  "Coerce to a value: an existing value passes through; a raw number is pushed as
+  a leaf (micrograd's __radd__/__rmul__ constant coercion)."
   [x]
-  (if (map? x) x (value x)))
+  (if (map? x) x (push-value! x)))
 
-(defn data
+(defn get-data
   "Forward scalar held by a value."
   [v]
   (get-in @tape [:nodes (:id v) :data]))
 
-(defn grad
+(defn get-grad
   "Accumulated gradient of a value (0.0 before backward!)."
   [v]
   (get (:grads @tape) (:id v) 0.0))
 
-;; ---------------------------------------------------------------------------
-;; Integer power for any integer exponent (jank's host is C++, not the JVM --
-;; no Math/pow to call).
-;; ---------------------------------------------------------------------------
-
+;; Integer power for any integer exponent (jank's host is C++, not the JVM -- no
+;; Math/pow to call).
 (defn- int-pow
   [base exponent]
   (cond
@@ -71,23 +64,21 @@
     (pos? exponent)  (reduce * 1.0 (repeat exponent base))
     :else            (/ 1.0 (reduce * 1.0 (repeat (- exponent) base)))))
 
-;; ===========================================================================
-;; Ops: forward construction. Each op coerces its args, computes the forward
-;; value, and records {:data :op :inputs ...}. The backward rule for each op
-;; lives in `compute-local-grads` below.
-;; ===========================================================================
+;; --- Ops: forward construction ---
+;; Each op coerces its args, computes the forward value, and records a node. The
+;; matching backward rule lives in compute-local-grads below.
 
 (defn add [x y]
   (let [a (->value x)
         b (->value y)]
-    (push-node! {:data   (+ (data a) (data b))
+    (push-node! {:data   (+ (get-data a) (get-data b))
                  :op     :add
                  :inputs [(:id a) (:id b)]})))
 
 (defn mul [x y]
   (let [a (->value x)
         b (->value y)]
-    (push-node! {:data (* (data a) (data b))
+    (push-node! {:data (* (get-data a) (get-data b))
                  :op :mul
                  :inputs [(:id a) (:id b)]})))
 
@@ -95,33 +86,30 @@
 ;; backward rule can read it.
 (defn pow* [x n]
   (let [a (->value x)]
-    (push-node! {:data (int-pow (data a) n)
+    (push-node! {:data (int-pow (get-data a) n)
                  :op :pow
                  :inputs [(:id a)]
                  :n n})))
 
 (defn relu [x]
   (let [a (->value x)]
-    (push-node! {:data (max 0.0 (data a))
+    (push-node! {:data (max 0.0 (get-data a))
                 :op :relu
                 :inputs [(:id a)]})))
 
-;; ---- Derived ops: pure composition, NO new calculus. The chain rule flows
-;; ---- through the primitives above for free, so these emit only add/mul/pow
-;; ---- nodes and need no local-grads case of their own.
+;; --- Derived ops (pure composition) ---
+;; The chain rule flows through the primitives above for free, so these emit only
+;; add/mul/pow nodes and need no local-grads case of their own.
 (defn neg [x] (mul x -1))
 (defn sub [x y] (add x (neg y)))
 (defn div [x y] (mul x (pow* y -1)))
 
-;; ===========================================================================
-;; Local gradients -- the calculus: each op's derivative wrt its inputs,
-;; upstream-independent. The reverse-scan bookkeeping that applies them is below.
-;; ===========================================================================
-
+;; --- Local gradients (the calculus) ---
+;; Each op's derivative wrt its inputs, upstream-independent. The reverse-scan
+;; bookkeeping that applies these is below.
 
 (defn- get-node-data [nodes index]
   (:data (nth nodes index)))
-
 
 (defn- compute-local-grads
   "Local gradients for one node: a map {input-index local-derivative}, i.e.
@@ -132,10 +120,10 @@
     (case (:op node)
       :leaf {}
 
-      ;; WORKED EXAMPLE: out = a + b  ->  d out/d a = 1, d out/d b = 1
+      ;; out = a + b  ->  d/da = 1, d/db = 1
       :add (let [[a b] input-indices] {a 1.0, b 1.0})
 
-      ;; out = a * b  ->  d out/d a = b, d out/d b = a
+      ;; out = a * b  ->  d/da = b, d/db = a
       :mul (let [[a b] input-indices] {a (get-node-data nodes b)
                                        b (get-node-data nodes a)})
 
@@ -151,12 +139,11 @@
 
       (throw (ex-info "compute-local-grads: no rule for op" {:op (:op node)})))))
 
-;; ===========================================================================
-;; Backward. Reverse scan over the tape. Because every input has a lower index
-;; than the op consuming it, walking high->low means a node's own gradient is
-;; fully accumulated before we use it to push gradients onto its inputs.
-;; Recomputed from scratch each call -> idempotent, no zero_grad footgun.
-;; ===========================================================================
+;; --- Backward (reverse scan) ---
+;; Because every input has a lower index than the op consuming it, walking
+;; high->low means a node's own gradient is fully accumulated before we use it to
+;; push gradients onto its inputs. Recomputed from scratch each call -> idempotent,
+;; no zero_grad footgun.
 
 (defn- seed-gradients
   "Gradient vector sized to the tape: all 0.0 except the root, seeded to 1.0
