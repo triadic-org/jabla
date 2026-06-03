@@ -69,8 +69,17 @@ https://github.com/jank-lang/jank/blob/main/compiler+runtime/doc/build.md
 - **nREPL server works** — tested with NeoVim/Conjure and Emacs/CIDER.
 - Native AOT gives sub-100ms startup; both static and dynamic executables.
 
+## Testing
+- **`clojure.test` works under jank** — bundled in the runtime, loads with no
+  extra deps (`deftest`/`is`/`are`/`testing`/`use-fixtures`/`run-tests`).
+  `run-tests` takes ns symbols, so per-file running is built in
+  (`make test SUITE=autograd`). Pass CLI args to `-main` after a `--` separator.
+  - Caveat: failure headers print `(nil) (:)` — jank doesn't capture the deftest
+    var name / line (metadata gap), so put the human label in a `(testing "...")`
+    block (it prints on failure). Float tolerance: a local `approx?` helper in
+    `test/jabla/test_util.jank` (clojure.test has none).
+
 ## Known gaps
-- No user-facing **test framework** → `test/jabla/test_harness.jank` (hand-rolled).
 - No jank-specific **linter/formatter**. We lint with **clj-kondo** (native binary,
   no JVM) treating `.jank` as `clj` — `make lint` mirrors the sources to `.clj`
   for project-wide analysis. Config in `.clj-kondo/config.edn`. The one blind

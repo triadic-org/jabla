@@ -20,7 +20,7 @@ help:
 	@echo "jabla targets:"
 	@echo "  make repl         Start a jank REPL on the module path (then connect Conjure/CIDER via nREPL)"
 	@echo "  make run          Run $(MAIN_NS) -main"
-	@echo "  make test         Run the hand-rolled test runner ($(TEST_RUNNER))"
+	@echo "  make test         Run all test suites (clojure.test). One suite: make test SUITE=autograd|blas"
 	@echo "  make compile      AOT-compile $(MAIN_NS)  [verify exact subcommand against your jank version]"
 	@echo "  make module-path  Print the Clojure-CLI-computed module path (needs clojure + JDK)"
 	@echo "  make doctor       Report which tools are installed"
@@ -47,7 +47,7 @@ run: lint-ascii check-jank
 	$(JANK) --module-path $(MODULE_PATH) run-main $(MAIN_NS)
 
 test: lint-ascii check-jank
-	$(JANK) --module-path $(MODULE_PATH) run-main $(TEST_RUNNER)
+	$(JANK) --module-path $(MODULE_PATH) run-main $(TEST_RUNNER) $(if $(SUITE),-- $(SUITE))
 
 # jank's lexer (0.1-alpha) rejects non-ASCII bytes even inside comments/strings.
 # Portable guard (works with GNU and BSD grep — no -P): flag any byte outside
