@@ -14,7 +14,7 @@ TEST_RUNNER ?= jabla.test-runner
 # and pass the result: `make repl MODULE_PATH="$(make -s module-path)"`.
 MODULE_PATH ?= src:test
 
-.PHONY: help repl run test compile clean module-path check-jank check-clojure doctor health lint-ascii
+.PHONY: help repl run test compile clean module-path check-jank check-clojure doctor health lint-ascii lint hooks
 
 help:
 	@echo "jabla targets:"
@@ -26,6 +26,8 @@ help:
 	@echo "  make doctor       Report which tools are installed"
 	@echo "  make health       Run 'jank check-health' (jank's own install diagnostic)"
 	@echo "  make lint-ascii   Fail if any .jank source has non-ASCII bytes (lexer limitation)"
+	@echo "  make lint         Run clj-kondo over the .jank sources (project-wide)"
+	@echo "  make hooks        Install the git pre-commit hook (.githooks)"
 	@echo "  make clean        Remove build artifacts"
 	@echo ""
 	@echo "  Override vars: JANK=, CLOJURE=, MAIN_NS=, MODULE_PATH="
@@ -56,6 +58,14 @@ lint-ascii:
 	  LC_ALL=C grep -rn '[^ -~]' src test --include='*.jank'; \
 	  exit 1; \
 	fi
+
+# Static analysis via clj-kondo (treats .jank as Clojure). See bin/lint.
+lint:
+	@bin/lint
+
+# Point git at the tracked hooks dir so the pre-commit hook runs for everyone.
+hooks:
+	@git config core.hooksPath .githooks && echo "git hooks installed (core.hooksPath=.githooks)"
 
 # AOT — jank can emit statically/dynamically linked executables. `compile-module`
 # AOT-compiles a namespace + its deps; `jank compile` builds a project whose

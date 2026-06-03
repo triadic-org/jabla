@@ -1,0 +1,17 @@
+;; clj-kondo config for jabla.
+;;
+;; jank is a Clojure dialect, so clj-kondo lints .jank files well when treated as
+;; `clj` (see `make lint`, which mirrors .jank -> .clj for project-wide analysis).
+;; This config silences the false positives that come from jank-specific features
+;; clj-kondo doesn't model. Tighten/loosen as the codebase grows.
+{:linters
+ {;; `cpp/` is jank's reserved C++ interop namespace — not a real Clojure ns, so
+  ;; clj-kondo can't resolve it. Exclude it (covers cpp/new, cpp/cast, etc.).
+  :unresolved-namespace {:exclude [cpp]}}
+
+ ;; Namespace-scoped overrides (don't touch the source files).
+ :config-in-ns
+ {;; The test exercises jabla.autograd; its require is intentional even while the
+  ;; assertion bodies are commented out (pre-implementation). Re-enable once the
+  ;; ops land and the calls are uncommented.
+  jabla.autograd-test {:linters {:unused-namespace {:level :off}}}}}

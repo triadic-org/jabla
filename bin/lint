@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Lint .jank sources with clj-kondo.
+#
+# clj-kondo only auto-detects .clj/.cljs/.cljc by extension, so we mirror the
+# .jank tree into a temp dir as .clj (preserving paths, so namespace<->file
+# checks still pass) and lint that as one project — giving cross-file analysis
+# (arity, unresolved/unused vars across namespaces), not just per-file. Config
+# lives in .clj-kondo/config.edn (handles the cpp/ interop namespace).
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+if ! command -v clj-kondo >/dev/null 2>&1; then
+  echo ">> clj-kondo not found. Install the native binary (no JVM needed):" >&2
+  echo "   curl -sLO https://raw.githubusercontent.com/clj-kondo/clj-kondo/master/script/install-clj-kondo" >&2
+  echo "   chmod +x install-clj-kondo && sudo ./install-clj-kondo --dir /usr/local/bin" >&2
+  exit 1
+fi
+
+LINT_DIR=".lint"
+rm -rf "$LINT_DIR"
+trap 'rm -rf "$LINT_DIR"' EXIT
+
+found=0
+while IFS= read -r f; do
+  found=1
+  dest="$LINT_DIR/${f%.jank}.clj"
+  mkdir -p "$(dirname "$dest")"
+  cp "$f" "$dest"
+done < <(find src test -name '*.jank' 2>/dev/null)
+
+if [ "$found" -eq 0 ]; then
+  echo "lint: no .jank files found."
+  exit 0
+fi
+
+# clj-kondo exit codes: 0 = no findings, 2 = warnings, 3 = errors.
+set +e
+clj-kondo --lang clj --lint "$LINT_DIR"
+status=$?
+set -e
+exit "$status"

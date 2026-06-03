@@ -8,9 +8,11 @@ classes/
 *.bc
 /jabla            # AOT-compiled executable
 
-# Clojure CLI
+# Clojure CLI / clj-kondo
 .cpcache/
 .clj-kondo/.cache/
+.clj-kondo/.cache
+/.lint/
 
 # datasets (downloaded, never committed — see reference/README.md)
 /data/*

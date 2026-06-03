@@ -71,7 +71,11 @@ https://github.com/jank-lang/jank/blob/main/compiler+runtime/doc/build.md
 
 ## Known gaps
 - No user-facing **test framework** → `test/jabla/test_harness.jank` (hand-rolled).
-- No **clj-kondo** for `cpp/` forms → lint blind spots around interop.
+- No jank-specific **linter/formatter**. We lint with **clj-kondo** (native binary,
+  no JVM) treating `.jank` as `clj` — `make lint` mirrors the sources to `.clj`
+  for project-wide analysis. Config in `.clj-kondo/config.edn`. The one blind
+  spot is `cpp/` interop forms (clj-kondo can't model them; the `cpp` namespace
+  is excluded in config). `make hooks` installs a pre-commit hook (ASCII + lint).
 
 ## Sources
 - jank clojure-cli docs: https://github.com/jank-lang/jank/blob/main/clojure-cli/README.md
