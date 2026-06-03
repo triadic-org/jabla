@@ -129,32 +129,37 @@
         b (->ref y)]
     (push-node! {:data (mul a (ipow b -1))})))
 
-;; ===========================================================================
-;; Local gradients. local-grads returns {input-index local-partial}, i.e.
-;; d(this node's output) w.r.t. each input, IGNORING the upstream grad. backward!
-;; multiplies in the upstream grad (the chain rule) and accumulates. Keeping the
-;; two apart is the whole point: this is just calculus, backward! is just
-;; bookkeeping.
-;; ===========================================================================
+;; ================================================================
+;; Keeping the two apart is the whole point: this is just calculus,
+;; backward! is just bookkeeping.
+;; ================================================================
 
-(defn- local-grads
+
+(defn- get-node-data [nodes i]
+  (:data (nth nodes i)))
+
+
+(defn- compute-local-grads
+  "Local gradients. local-grads returns {input-index local-partial}, i.e.
+  d(this node's output) w.r.t. each input, IGNORING the upstream grad. backward!
+  multiplies in the upstream grad (the chain rule) and accumulates."
   [node nodes]
   (let [ins (:inputs node)]
     (case (:op node)
       :leaf {}
 
       ;; WORKED EXAMPLE: out = a + b  ->  d out/d a = 1, d out/d b = 1
-      :add (let [[a b] ins] {a 1.0 b 1.0})
+      :add (let [[a b] ins] {a 1.0, b 1.0})
 
       ;; TODO(you): out = a * b. Read an input's value with (:data (nth nodes i)).
-      ;; :mul ...
+      :mul (let [[a b] ins] {a (get-node-data nodes b), b (get-node-data nodes a)})
 
       ;; TODO(you): out = a^n, with n = (:n node). Power rule (ipow may help).
       ;; :pow ...
 
       ;; TODO(you): out = relu(a). Gradient flows only where the unit is active;
       ;; the forward value is already on the node as (:data node).
-      ;; :relu ...
+      :relu (let [[a] ins] {a (get-node-data nodes a)})
 
       (throw (ex-info "local-grads: no rule for op" {:op (:op node)})))))
 
@@ -164,22 +169,47 @@
 ;; accumulated before we use it to push grads onto its inputs. Recomputed from
 ;; scratch each call -> idempotent, no zero_grad footgun.
 ;; ===========================================================================
+;;
 
-(defn backward! [root]
+(defn- make-root-seed
+  "Seed grads vector with root at 1 wrt to itself"
+  [nodes root]
+  (let [n (count nodes)]
+    (assoc (vec (repeat n 0.0))
+           (:ref root)
+           1.0)))
+
+(defn- distribute-node-grad
+  "Given global grads and node index, propagate grad[idx] to its inputs"
+  [nodes grads idx]
+  (let [grad (nth grads idx)
+        node (nth nodes idx)
+        local-grads (compute-local-grads node nodes)]
+    (reduce
+     (fn [grads' [input-idx local-deriv]]
+       (let [contrib (* grad local-deriv)
+             curr-input-grad (nth grads' input-idx)
+             new-input-grad (+ curr-input-grad contrib)]
+         (assoc grads' input-idx new-input-grad)))
+     grads
+     local-grads)))
+
+(defn- backward-pass
+  "Distribute gradients going through nodes backwards"
+  [nodes seed]
+  (let [last-idx (dec (count nodes))
+        backward-idxs (range last-idx -1 -1)]
+    (reduce
+     (fn [grads idx]
+       (distribute-node-grad nodes grads idx))
+     seed
+     backward-idxs)))
+
+(defn backward! 
+  "Multiplies in the upstream grad (the chain rule) and accumulates gradients."
+  [root]
   (let [nodes (:nodes @tape)
-        n     (count nodes)
-        seed  (assoc (vec (repeat n 0.0)) (:ref root) 1.0)
-        grads (reduce
-                (fn [gr idx]
-                  (let [g (nth gr idx)]
-                    (reduce
-                      (fn [gr2 entry]
-                        (let [in-idx  (first entry)
-                              partial (second entry)]
-                          (assoc gr2 in-idx (+ (nth gr2 in-idx) (* g partial)))))
-                      gr
-                      (local-grads (nth nodes idx) nodes))))
-                seed
-                (range (dec n) -1 -1))]
+        seed (make-root-seed nodes root)
+        grads (backward-pass nodes seed)]
     (swap! tape assoc :grads grads)
     root))
