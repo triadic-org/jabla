@@ -100,7 +100,8 @@
   (let [a (->value x)]
     (push-node! {:data (int-pow (data a) n)
                  :op :pow
-                 :inputs [(:id a) :n n]})))
+                 :inputs [(:id a)]
+                 :n n})))
 
 ;; TODO(you): relu. One input. forward = (max 0.0 (data a)).
 (defn relu [x]
@@ -156,8 +157,10 @@
       :mul (let [[a b] input-indices] {a (get-node-data nodes b)
                                        b (get-node-data nodes a)})
 
-      ;; TODO(you): out = a^n, with n = (:n node). Power rule (int-pow may help).
-      ;; :pow ...
+      ;; out = a^n, with n = (:n node). Power rule.
+      :pow (let [[a] input-indices
+                 n (:n node)]
+             {a (* n (int-pow (get-node-data nodes a) (dec n)))})
 
       ;; out = relu(a). Gradient flows only where the unit is active.
       :relu (let [[a] input-indices]
