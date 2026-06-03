@@ -1,41 +1,52 @@
 # Context: jabla
 
 ## Overview
-An ML library in **jank** (Clojure on LLVM/C++). Name = jank + nabla (∇). The
-module build order and validators are in `docs/roadmap.md`; verified jank
-tooling notes in `docs/jank-notes.md`.
+A from-scratch ML library in **jank** (Clojure on LLVM/C++). Name = jank + nabla (∇).
+A learning project: port Karpathy's micrograd → nanoGPT ladder to jank to
+understand models bottom-up. Build order + validators in `docs/roadmap.md`; jank
+tooling notes/gotchas in `docs/jank-notes.md`; autograd design refs in
+`docs/autograd-references.md`. Remote: `git@github.com:triadic-org/jabla.git`.
 
-## Current Work
-**Scaffold only — not yet implemented.** Repo structure, Makefile/deps.edn build
-wiring, docs, hand-rolled test harness, and vendored reference implementations
-are in place. Source files (`src/jabla/*.jank`) are stubs that sketch API +
-design notes.
+**Working mode:** the user writes the ML/jank code themselves to learn. The
+assistant does scaffolding, boilerplate, tests, naming/comment passes, reviews,
+and research — NOT the ML implementation unless explicitly asked.
 
-## Key Decisions
-- **Build tooling:** Clojure CLI `deps.edn` (computes `--module-path`) wrapped by
-  a Makefile (jank CLI invocations). `MODULE_PATH=src:test` works with no JDK
-  until real deps are added. Details + sources in `docs/jank-notes.md`.
-- **No jank test framework** → hand-rolled assertions in
-  `test/jabla/test_harness.jank` + a `test_runner`.
-- **C++ interop syntax intentionally not scaffolded** — it's young/easy to get
-  wrong; `cpp/README.md` points to the interop docs.
+## Current state (June 2026) — Step 1 done, Step 2 scaffolded
+- **Step 1 (scalar reverse-mode autograd): COMPLETE.** `src/jabla/autograd.jank`
+  is a tape design, fully implemented and green. Tests layered in
+  `test/jabla/autograd_test.jank`: unit (per-op exact) + compositions (neg/sub/div)
+  + integration (numerical `grad-check` over arbitrary exprs, incl. the full
+  micrograd test_more_ops) + one exact oracle anchor (sanity-check). **44 passed,
+  1 pending** (`make test`).
+- **Step 2 (sgemm via cpp/): SCAFFOLDED, not implemented.** `src/jabla/blas.jank`
+  has a done pure-jank `matmul-reference` (ground truth) + a guided `sgemm` stub.
+  `test/jabla/blas_test.jank`: reference test live, sgemm-vs-reference test pending.
 
-## Environment state (June 2026) — toolchain is up
-- **jank 0.1-alpha installed** via the official Ubuntu PPA (`make doctor` → found).
-  `make health` (`jank check-health`) is green: JIT C++ + AOT both work.
-- **`make run` and `make test` both pass** through real jank.
-- **Python validation venv** at `.venv/` (gitignored): torch 2.12.0+cpu + numpy.
-  `reference/micrograd` PyTorch ground-truth tests pass (`pytest test/`).
-- Not installed (not needed yet): clojure CLI + JDK — only for `make module-path`
-  once external deps are added.
-- jank gotchas captured in `docs/jank-notes.md`: ASCII-only source, no `--version`
-  (use `check-health`), don't shadow core names you call.
+## Naming convention (settled)
+- **node** = tape entry (`:leaf` | op-result); **value** = the `{:id i}` handle
+  user code holds. ("value" is the accurate scalar term; "tensor" is reserved for
+  Step 3 arrays.)
+- append primitives bang: `push-node!`, `push-leaf!`. readers get-: `get-data`,
+  `get-grad`, `get-node-data`. builders no affix: `add`/`mul`/`pow*`/`relu`/`neg`/
+  `sub`/`div`, `->value` (coercion). lifecycle bang: `reset-tape!`, `backward!`.
+- Comments: one style — `;; --- title ---` + plain `;;` prose (no boxes).
 
-## Next Steps
-- [ ] Implement `jabla.autograd` (validate against `reference/micrograd`;
-      ground-truth tests already run green in the venv).
-- [ ] Stand up the `sgemm` probe in `cpp/` for the host/device timing split
-      (jank JIT-compiles C++, so interop is viable).
-- [ ] Wire real assertions into `test/jabla/autograd_test.jank` as ops land.
+## Tooling
+- jank 0.1-alpha installed via Ubuntu PPA. `make run|test|repl|doctor|health`.
+- Python venv `.venv/` (gitignored): torch 2.12.0+cpu + numpy + pytest (runs the
+  micrograd reference for ground truth).
+- clj-kondo lint + pre-commit hook: `make lint`, `make hooks` (hook = ASCII guard
+  + clj-kondo; per-clone, run `make hooks` after cloning).
+- jank gotchas: ASCII-only source (lexer rejects non-ASCII even in comments);
+  no `--version` (use `check-health`); no `(catch :default ...)`; don't shadow
+  core names you call.
 
-> Local-only project notes live in `private/` (gitignored, not published).
+## Next steps
+- [ ] Implement `blas/sgemm` via `cpp/` (cblas_sgemm) — the C++ interop is the
+      learning task. Two unknowns: how jank links OpenBLAS, and the jank↔C float*
+      marshaling. Fallback: inline-C++ matmul first (no external lib), then swap
+      in cblas_sgemm. Then flip the pending blas test green + add host/device timing.
+- [ ] (later) Step 3: lift autograd to tensors on native BLAS (`tensor.jank`).
+
+> Local-only project notes (full brief, research angle) live in `private/`
+> (gitignored, not published).
