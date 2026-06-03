@@ -1,0 +1,56 @@
+(ns jabla.blas)
+
+;; --- sgemm probe (roadmap step 2) ---
+;; First real C++ interop: compute a matrix multiply via BLAS cblas_sgemm through
+;; jank's cpp/ namespace, and validate it against a pure-jank reference. This is
+;; the primitive the whole tensor track (jabla.tensor, then a GPT) is built on --
+;; transformers are ~90% matmul. See docs/roadmap.md and cpp/README.md.
+;;
+;; Matrix representation here: a vector of row vectors of doubles, e.g.
+;;   [[1.0 2.0 3.0]
+;;    [4.0 5.0 6.0]]   is 2 x 3.
+;; matmul-reference and sgemm share this representation so blas-test can diff them.
+
+(defn matmul-reference
+  "Naive row-by-column matrix multiply, pure jank -- the ground truth to check the
+  BLAS result against. a is m x k, b is k x n; returns m x n."
+  [a b]
+  (let [m (count a)
+        k (count (first a))
+        n (count (first b))]
+    (vec (for [i (range m)]
+           (vec (for [j (range n)]
+                  (reduce + 0.0
+                          (for [p (range k)]
+                            (* (nth (nth a i) p)
+                               (nth (nth b p) j))))))))))
+
+(defn sgemm
+  "Matrix multiply via BLAS cblas_sgemm through cpp/ interop. Same contract as
+  matmul-reference (a: m x k, b: k x n -> m x n), so blas-test can diff the two.
+
+  NOT IMPLEMENTED -- this is the learning task (the jank<->C++ marshaling here is
+  the exact skill every tensor op will reuse). Suggested steps:
+
+    1. Bring the BLAS header into the ns form (cblas.h). The first real unknown is
+       how jank takes the include dir and links libopenblas -- `jank --help` shows
+       -I/--include-dir for headers; the link mechanism is what to discover here.
+    2. Flatten a and b into contiguous C float buffers (row-major). This is the
+       jank->C boundary: allocate and write via the cpp/ primitives in
+       cpp/README.md (cpp/new, cpp/cast, pointer writes).
+    3. Allocate an m*n output buffer; call cpp/cblas_sgemm with row-major order,
+       no-transpose for both, M=m N=n K=k, alpha=1.0 beta=0.0, leading dims
+       lda=k ldb=n ldc=n.
+    4. Read the output buffer back into nested jank vectors (m rows of n), matching
+       matmul-reference's shape.
+    5. Free the buffers (cpp/delete) unless you leave them to the GC.
+
+  Tip: if linking OpenBLAS turns into a yak-shave, first write the multiply inline
+  in a cpp/ block (no external lib) to learn the marshaling half in isolation, then
+  swap the body for cblas_sgemm. Same lesson, one unknown at a time.
+
+  Once it works, wrap a host (wall-clock) vs device timer around the call -- the
+  host/device split the roadmap calls for (device timing arrives with cuBLAS)."
+  [a b]
+  (throw (ex-info "blas/sgemm not implemented -- see the steps in the docstring"
+                  {:a a :b b})))

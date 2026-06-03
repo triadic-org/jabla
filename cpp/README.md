@@ -6,9 +6,13 @@ through the `cpp/` namespace. Headers and any vendored C++ sources live here,
 alongside the jank that calls them.
 
 ## The `sgemm` probe (roadmap step 2)
+Scaffold is in `src/jabla/blas.jank` (a done pure-jank `matmul-reference` for
+ground truth + a guided `sgemm` stub to implement) and `test/jabla/blas_test.jank`
+(reference test live; the `sgemm`-vs-reference test is `pending`).
+
 The first interop milestone is a single **`sgemm`** (single-precision matmul)
 through `cpp/`:
-1. Correctness — result matches a reference matmul.
+1. Correctness — result matches `matmul-reference`.
 2. The first **host-vs-device timing split** — wall-clock around the call vs a
    CUDA-event timer inside it.
 
