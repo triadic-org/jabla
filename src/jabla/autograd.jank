@@ -111,25 +111,11 @@
                 :inputs [(:id a)]})))
 
 ;; ---- Derived ops: pure composition, NO new calculus. The chain rule flows
-;; ---- through the primitives above for free, so these need no local-grads.
-;; TODO(you): neg = mul by -1 ; sub = a + (neg b) ; div = a * (pow* b -1)
-(defn neg [x]
-  (let [a (->value x)]
-    (push-node! {:data (* (data a) -1)
-                 :op :neg
-                 :inputs [(:id a)]})))
-
-(defn sub [x y]
-  (let [a (->value x)
-        b (->value y)]
-    (push-node! {:data (add a (neg b))
-                 :op :sub
-                 :inputs [(:id a) (:id b)]})))
-
-(defn div [x y]
-  (let [a (->value x)
-        b (->value y)]
-    (push-node! {:data (mul a (int-pow b -1))})))
+;; ---- through the primitives above for free, so these emit only add/mul/pow
+;; ---- nodes and need no local-grads case of their own.
+(defn neg [x] (mul x -1))
+(defn sub [x y] (add x (neg y)))
+(defn div [x y] (mul x (pow* y -1)))
 
 ;; ================================================================
 ;; Keeping the two apart is the whole point: this is just calculus,
