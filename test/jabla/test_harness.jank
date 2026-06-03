@@ -5,7 +5,7 @@
 ;; supports a before-each setup hook so tests don't repeat their fixtures.
 ;;
 ;; Usage (see jabla.autograd-test):
-;;   (before-each! (fn [] (ag/reset-tape!)))   ; runs before every deftest
+;;   (before-each! ag/reset-tape!)   ; runs before every deftest
 ;;   (deftest "x + x"
 ;;     (approx= 6.0 (some-value) 1e-9))
 ;;   (summary!)  ; prints which tests failed + totals; returns true iff all passed

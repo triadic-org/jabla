@@ -7,9 +7,9 @@
 ;; delegate the hot loop to cpp/ later). Validate against the frozen oracle
 ;; numbers already sitting in test/jabla/autograd_test.jank.
 ;;
-;; The model: one tape. :nodes is a vector; a node's index in that vector IS its
-;; id (this is the "atom-counter" idea, except the counter is the tape length and
-;; the id doubles as the storage slot). Ops append in evaluation order, so the
+;; The model: one tape. :nodes is a vector; a node's index in :nodes is its id
+;; and its storage slot, so the tape length doubles as the id counter (no
+;; separate id state). Ops append in evaluation order, so the
 ;; tape is already topologically sorted. Every input has a lower index than the
 ;; op that consumes it, and backward is a plain reverse scan, no DFS topo-sort.
 ;; :grads is the parallel gradient array, recomputed from scratch by backward.
@@ -60,9 +60,8 @@
   (get (:grads @tape) (:id v) 0.0))
 
 ;; ---------------------------------------------------------------------------
-;; Small helper: integer power without host Math interop (jank is C++, not JVM,
-;; so no Math/pow). Handles the exponents the tests use: 3, 2, and -1, plus the
-;; -2 that pow's derivative needs.
+;; Integer power for any integer exponent (jank's host is C++, not the JVM --
+;; no Math/pow to call).
 ;; ---------------------------------------------------------------------------
 
 (defn- int-pow
@@ -78,7 +77,6 @@
 ;; lives in `compute-local-grads` below.
 ;; ===========================================================================
 
-;; ---- WORKED EXAMPLE: add. Use this as the template for the rest. ----
 (defn add [x y]
   (let [a (->value x)
         b (->value y)]
@@ -93,9 +91,8 @@
                  :op :mul
                  :inputs [(:id a) (:id b)]})))
 
-;; TODO(you): pow*. One value input + a constant integer exponent n. Store n on
-;; the node so the backward rule can read it. forward = (int-pow (data a) n).
-;; Node shape: {:data .. :op :pow :inputs [(:id a)] :n n}
+;; pow*: value raised to a constant integer exponent. Stores :n so the :pow
+;; backward rule can read it.
 (defn pow* [x n]
   (let [a (->value x)]
     (push-node! {:data (int-pow (data a) n)
@@ -103,7 +100,6 @@
                  :inputs [(:id a)]
                  :n n})))
 
-;; TODO(you): relu. One input. forward = (max 0.0 (data a)).
 (defn relu [x]
   (let [a (->value x)]
     (push-node! {:data (max 0.0 (data a))
@@ -117,10 +113,10 @@
 (defn sub [x y] (add x (neg y)))
 (defn div [x y] (mul x (pow* y -1)))
 
-;; ================================================================
-;; Keeping the two apart is the whole point: this is just calculus,
-;; backward! is just bookkeeping.
-;; ================================================================
+;; ===========================================================================
+;; Local gradients -- the calculus: each op's derivative wrt its inputs,
+;; upstream-independent. The reverse-scan bookkeeping that applies them is below.
+;; ===========================================================================
 
 
 (defn- get-node-data [nodes index]
