@@ -159,7 +159,8 @@
 
       ;; TODO(you): out = relu(a). Gradient flows only where the unit is active;
       ;; the forward value is already on the node as (:data node).
-      :relu (let [[a] ins] {a (get-node-data nodes a)})
+      :relu (let [[a] ins] {a (let [val (get-node-data nodes a)]
+                                (if (> val 0) 1 0)})
 
       (throw (ex-info "local-grads: no rule for op" {:op (:op node)})))))
 
@@ -169,7 +170,6 @@
 ;; accumulated before we use it to push grads onto its inputs. Recomputed from
 ;; scratch each call -> idempotent, no zero_grad footgun.
 ;; ===========================================================================
-;;
 
 (defn- make-root-seed
   "Seed grads vector with root at 1 wrt to itself"
