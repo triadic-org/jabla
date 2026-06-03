@@ -14,15 +14,14 @@
 (defn sanity-check []
   (t/deftest "sanity check (vs micrograd test_sanity_check)"
     ;; x = -4;  z = 2x + 2 + x;  q = relu(z) + z*x;  h = relu(z*z);  y = h + q + q*x
-    ;; (let [x (ag/value -4.0)
-    ;;       z (ag/add (ag/add (ag/mul 2 x) (ag/value 2)) x)
-    ;;       q (ag/add (ag/relu z) (ag/mul z x))
-    ;;       h (ag/relu (ag/mul z z))
-    ;;       y (ag/add (ag/add h q) (ag/mul q x))]
-    ;;   (ag/backward! y)
-    ;;   (t/approx= -20.0 (ag/data y) 1e-6)     ; forward
-    ;;   (t/approx=  46.0 (ag/grad x) 1e-6))    ; backward
-    (t/check true "placeholder - uncomment once ops land")))
+    (let [x (ag/value -4.0)
+          z (ag/add (ag/add (ag/mul 2 x) (ag/value 2)) x)
+          q (ag/add (ag/relu z) (ag/mul z x))
+          h (ag/relu (ag/mul z z))
+          y (ag/add (ag/add h q) (ag/mul q x))]
+      (ag/backward! y)
+      (t/approx= -20.0 (ag/data y) 1e-6)     ; forward
+      (t/approx=  46.0 (ag/grad x) 1e-6)))) ; backward
 
 (defn more-ops []
   (t/deftest "more ops (vs micrograd test_more_ops)"
