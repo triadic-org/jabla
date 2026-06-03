@@ -18,63 +18,63 @@
 (defn unit-gradients []
 
   (t/deftest "add (distinct inputs)"           ; d(a+b)/da = 1, d(a+b)/db = 1
-    (let [a (ag/push-value! 3.0) b (ag/push-value! 5.0) y (ag/add a b)]
+    (let [a (ag/push-leaf! 3.0) b (ag/push-leaf! 5.0) y (ag/add a b)]
       (ag/backward! y)
       (t/approx= 8.0 (ag/get-data y) 1e-9)
       (t/approx= 1.0 (ag/get-grad a) 1e-9)
       (t/approx= 1.0 (ag/get-grad b) 1e-9)))
 
   (t/deftest "add (same node twice)"           ; y = x + x = 2x -> dy/dx = 2
-    (let [x (ag/push-value! 3.0) y (ag/add x x)]
+    (let [x (ag/push-leaf! 3.0) y (ag/add x x)]
       (ag/backward! y)
       (t/approx= 6.0 (ag/get-data y) 1e-9)
       (t/approx= 2.0 (ag/get-grad x) 1e-9)))
 
   (t/deftest "mul (distinct inputs)"           ; d(a*b)/da = b, d(a*b)/db = a
-    (let [a (ag/push-value! 3.0) b (ag/push-value! 5.0) y (ag/mul a b)]
+    (let [a (ag/push-leaf! 3.0) b (ag/push-leaf! 5.0) y (ag/mul a b)]
       (ag/backward! y)
       (t/approx= 15.0 (ag/get-data y) 1e-9)
       (t/approx= 5.0 (ag/get-grad a) 1e-9)
       (t/approx= 3.0 (ag/get-grad b) 1e-9)))
 
   (t/deftest "mul (same node)"                 ; y = x*x -> dy/dx = 2x
-    (let [x (ag/push-value! 3.0) y (ag/mul x x)]
+    (let [x (ag/push-leaf! 3.0) y (ag/mul x x)]
       (ag/backward! y)
       (t/approx= 9.0 (ag/get-data y) 1e-9)
       (t/approx= 6.0 (ag/get-grad x) 1e-9)))
 
   (t/deftest "relu (active, x > 0)"            ; relu(3) = 3, d/dx = 1
-    (let [x (ag/push-value! 3.0) y (ag/relu x)]
+    (let [x (ag/push-leaf! 3.0) y (ag/relu x)]
       (ag/backward! y)
       (t/approx= 3.0 (ag/get-data y) 1e-9)
       (t/approx= 1.0 (ag/get-grad x) 1e-9)))
 
   (t/deftest "relu (inactive, x < 0)"          ; relu(-3) = 0, d/dx = 0
-    (let [x (ag/push-value! -3.0) y (ag/relu x)]
+    (let [x (ag/push-leaf! -3.0) y (ag/relu x)]
       (ag/backward! y)
       (t/approx= 0.0 (ag/get-data y) 1e-9)
       (t/approx= 0.0 (ag/get-grad x) 1e-9)))
 
   (t/deftest "pow* (x^2 -> 2x)"                ; d(x^2)/dx = 2x = 6
-    (let [x (ag/push-value! 3.0) y (ag/pow* x 2)]
+    (let [x (ag/push-leaf! 3.0) y (ag/pow* x 2)]
       (ag/backward! y)
       (t/approx= 9.0 (ag/get-data y) 1e-9)
       (t/approx= 6.0 (ag/get-grad x) 1e-9)))
 
   (t/deftest "pow* (x^3 -> 3x^2)"             ; d(x^3)/dx = 3x^2 = 12
-    (let [x (ag/push-value! 2.0) y (ag/pow* x 3)]
+    (let [x (ag/push-leaf! 2.0) y (ag/pow* x 3)]
       (ag/backward! y)
       (t/approx= 8.0 (ag/get-data y) 1e-9)
       (t/approx= 12.0 (ag/get-grad x) 1e-9)))
 
   (t/deftest "pow* (1/x -> -1/x^2)"           ; d(x^-1)/dx = -1/x^2 = -0.0625
-    (let [x (ag/push-value! 4.0) y (ag/pow* x -1)]
+    (let [x (ag/push-leaf! 4.0) y (ag/pow* x -1)]
       (ag/backward! y)
       (t/approx= 0.25 (ag/get-data y) 1e-9)
       (t/approx= -0.0625 (ag/get-grad x) 1e-9)))
 
   (t/deftest "constant coercion (2 * x)"       ; raw number becomes a leaf, dy/dx = 2
-    (let [x (ag/push-value! 4.0) y (ag/mul 2 x)]
+    (let [x (ag/push-leaf! 4.0) y (ag/mul 2 x)]
       (ag/backward! y)
       (t/approx= 8.0 (ag/get-data y) 1e-9)
       (t/approx= 2.0 (ag/get-grad x) 1e-9))))
@@ -85,20 +85,20 @@
 (defn compositions []
 
   (t/deftest "neg (-x -> -1)"
-    (let [x (ag/push-value! 3.0) y (ag/neg x)]
+    (let [x (ag/push-leaf! 3.0) y (ag/neg x)]
       (ag/backward! y)
       (t/approx= -3.0 (ag/get-data y) 1e-9)
       (t/approx= -1.0 (ag/get-grad x) 1e-9)))
 
   (t/deftest "sub (a - b -> 1, -1)"
-    (let [a (ag/push-value! 7.0) b (ag/push-value! 4.0) y (ag/sub a b)]
+    (let [a (ag/push-leaf! 7.0) b (ag/push-leaf! 4.0) y (ag/sub a b)]
       (ag/backward! y)
       (t/approx= 3.0 (ag/get-data y) 1e-9)
       (t/approx= 1.0 (ag/get-grad a) 1e-9)
       (t/approx= -1.0 (ag/get-grad b) 1e-9)))
 
   (t/deftest "div (a / b -> 1/b, -a/b^2)"
-    (let [a (ag/push-value! 6.0) b (ag/push-value! 2.0) y (ag/div a b)]
+    (let [a (ag/push-leaf! 6.0) b (ag/push-leaf! 2.0) y (ag/div a b)]
       (ag/backward! y)
       (t/approx= 3.0 (ag/get-data y) 1e-9)
       (t/approx= 0.5 (ag/get-grad a) 1e-9)
@@ -113,12 +113,12 @@
   Asserts each input's analytic grad ~ its central finite difference."
   [build inputs]
   (ag/reset-tape!)
-  (let [input-values    (mapv ag/push-value! inputs)
+  (let [input-values    (mapv ag/push-leaf! inputs)
         output          (build input-values)
         _               (ag/backward! output)
         analytic-grads  (mapv ag/get-grad input-values)
         h               1e-6
-        output-at       (fn [scalars] (ag/reset-tape!) (ag/get-data (build (mapv ag/push-value! scalars))))
+        output-at       (fn [scalars] (ag/reset-tape!) (ag/get-data (build (mapv ag/push-leaf! scalars))))
         numerical-grads (vec (map-indexed
                              (fn [index _]
                                (let [bumped (fn [delta]
@@ -170,8 +170,8 @@
 (defn sanity-check []
   (t/deftest "sanity check (vs micrograd test_sanity_check)"
     ;; x = -4;  z = 2x + 2 + x;  q = relu(z) + z*x;  h = relu(z*z);  y = h + q + q*x
-    (let [x (ag/push-value! -4.0)
-          z (ag/add (ag/add (ag/mul 2 x) (ag/push-value! 2)) x)
+    (let [x (ag/push-leaf! -4.0)
+          z (ag/add (ag/add (ag/mul 2 x) (ag/push-leaf! 2)) x)
           q (ag/add (ag/relu z) (ag/mul z x))
           h (ag/relu (ag/mul z z))
           y (ag/add (ag/add h q) (ag/mul q x))]

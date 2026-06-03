@@ -34,8 +34,8 @@
     (swap! tape update :nodes conj node)
     {:id index}))
 
-(defn push-value!
-  "Push a leaf value (a constant or input) onto the tape; return it."
+(defn push-leaf!
+  "Push a leaf node (a constant or input) onto the tape; return its value."
   [scalar]
   (push-node! {:data (double scalar), :op :leaf, :inputs []}))
 
@@ -43,7 +43,7 @@
   "Coerce to a value: an existing value passes through; a raw number is pushed as
   a leaf (micrograd's __radd__/__rmul__ constant coercion)."
   [x]
-  (if (map? x) x (push-value! x)))
+  (if (map? x) x (push-leaf! x)))
 
 (defn get-data
   "Forward scalar held by a value."
