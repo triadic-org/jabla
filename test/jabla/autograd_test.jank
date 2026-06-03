@@ -134,7 +134,7 @@
     (t/pending "make div a composition (a * pow* b -1)")))
 
 (defn run []
-  (t/before-each! (fn [] (ag/reset-tape!)))
+  (t/before-each! ag/reset-tape!)
   (unit-gradients)
   (sanity-check)
   (more-ops)
