@@ -6,7 +6,7 @@
 ;;
 ;; Depends on a working BLAS/cuBLAS sgemm through cpp/ interop (see cpp/README.md).
 ;;
-;; Not implemented — design notes only.
+;; Not implemented - design notes only.
 ;; ============================================================================
 
 ;; Open questions to resolve here:
@@ -16,7 +16,7 @@
 ;;     interop type DSL. The former keeps the Clojure side in control; the
 ;;     latter leans on C++ but couples to a library's layout.
 ;;   - Autograd reuse: the tape/graph design from jabla.autograd should extend
-;;     to tensor ops — each op records its local vjp. The single-tape strategy
+;;     to tensor ops - each op records its local vjp. The single-tape strategy
 ;;     scales best here.
 ;;   - Ops for a GPT: matmul, add/broadcast, softmax, layernorm, gelu, embedding
 ;;     lookup, cross-entropy. Start with matmul (the sgemm).

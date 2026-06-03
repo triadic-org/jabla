@@ -4,7 +4,7 @@
 ;; Scalar reverse-mode autograd.
 ;; Modeled on karpathy/micrograd  ->  reference/micrograd/micrograd/engine.py
 ;;
-;; Not implemented — this file sketches the API and the one design decision the
+;; Not implemented - this file sketches the API and the one design decision the
 ;; immutable-value host forces.
 ;; ============================================================================
 
@@ -24,12 +24,12 @@
 ;; ---------------------------------------------------------------------------
 
 ;; ---------------------------------------------------------------------------
-;; Mutation strategy — micrograd mutates `grad` on a plain object; Clojure/jank
+;; Mutation strategy - micrograd mutates `grad` on a plain object; Clojure/jank
 ;; values are immutable, so pick one:
 ;;
-;;   (a) deftype with ^:mutable fields  — closest to micrograd, fast.
-;;   (b) atoms (grad as (atom 0.0))     — idiomatic, thread-safe, boxier.
-;;   (c) a single tape/graph in one atom — nodes are pure data; all mutable
+;;   (a) deftype with ^:mutable fields  - closest to micrograd, fast.
+;;   (b) atoms (grad as (atom 0.0))     - idiomatic, thread-safe, boxier.
+;;   (c) a single tape/graph in one atom - nodes are pure data; all mutable
 ;;       state lives in one tape folded over in backward. Scales best toward
 ;;       the tensor and trace work; also the shape jabla.trace wants.
 ;; ---------------------------------------------------------------------------
@@ -46,6 +46,6 @@
 ;; (defn data [v]) (defn grad [v])    ; accessors
 ;;
 ;; Validation: reference/micrograd/test/test_engine.py checks grads against
-;; PyTorch — reproduce those numbers in test/jabla/autograd_test.jank.
+;; PyTorch - reproduce those numbers in test/jabla/autograd_test.jank.
 
 ;; TODO: implement.

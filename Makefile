@@ -14,7 +14,7 @@ TEST_RUNNER ?= jabla.test-runner
 # and pass the result: `make repl MODULE_PATH="$(make -s module-path)"`.
 MODULE_PATH ?= src:test
 
-.PHONY: help repl run test compile clean module-path check-jank check-clojure doctor
+.PHONY: help repl run test compile clean module-path check-jank check-clojure doctor health
 
 help:
 	@echo "jabla targets:"
@@ -24,6 +24,7 @@ help:
 	@echo "  make compile      AOT-compile $(MAIN_NS)  [verify exact subcommand against your jank version]"
 	@echo "  make module-path  Print the Clojure-CLI-computed module path (needs clojure + JDK)"
 	@echo "  make doctor       Report which tools are installed"
+	@echo "  make health       Run 'jank check-health' (jank's own install diagnostic)"
 	@echo "  make clean        Remove build artifacts"
 	@echo ""
 	@echo "  Override vars: JANK=, CLOJURE=, MAIN_NS=, MODULE_PATH="
@@ -45,9 +46,9 @@ run: check-jank
 test: check-jank
 	$(JANK) --module-path $(MODULE_PATH) run-main $(TEST_RUNNER)
 
-# AOT — jank can emit statically/dynamically linked executables. Confirm the
-# exact subcommand (`compile-module` / `compile` / etc.) for your build; the
-# CLI is young and this name may move.
+# AOT — jank can emit statically/dynamically linked executables. `compile-module`
+# AOT-compiles a namespace + its deps; `jank compile` builds a project whose
+# entrypoint module has -main (see `jank --help`).
 compile: check-jank
 	$(JANK) --module-path $(MODULE_PATH) compile-module $(MAIN_NS)
 
@@ -55,9 +56,12 @@ module-path: check-clojure
 	@$(CLOJURE) -A:test -Spath
 
 doctor:
-	@printf "%-10s " "jank:";    command -v $(JANK)    >/dev/null 2>&1 && $(JANK) --version 2>/dev/null || echo "NOT FOUND"
-	@printf "%-10s " "clojure:"; command -v $(CLOJURE) >/dev/null 2>&1 && echo "found"               || echo "NOT FOUND (only needed for module-path)"
+	@printf "%-10s " "jank:";    command -v $(JANK)    >/dev/null 2>&1 && echo "found ($$(command -v $(JANK)))" || echo "NOT FOUND"
+	@printf "%-10s " "clojure:"; command -v $(CLOJURE) >/dev/null 2>&1 && echo "found"                          || echo "NOT FOUND (only needed for module-path)"
 	@printf "%-10s " "make:";    make --version | head -1
+
+health: check-jank
+	$(JANK) check-health
 
 clean:
 	rm -rf target classes ./jabla *.o *.so *.dylib *.ll *.bc

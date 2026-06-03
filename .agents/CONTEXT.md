@@ -20,15 +20,22 @@ design notes.
 - **C++ interop syntax intentionally not scaffolded** — it's young/easy to get
   wrong; `cpp/README.md` points to the interop docs.
 
-## Environment state (June 2026)
-- Installed: git, make, network. **NOT installed:** jank, clojure CLI, java.
-- jank install is in flux (LLVM 22 packaging unresolved) → expect build-from-source.
+## Environment state (June 2026) — toolchain is up
+- **jank 0.1-alpha installed** via the official Ubuntu PPA (`make doctor` → found).
+  `make health` (`jank check-health`) is green: JIT C++ + AOT both work.
+- **`make run` and `make test` both pass** through real jank.
+- **Python validation venv** at `.venv/` (gitignored): torch 2.12.0+cpu + numpy.
+  `reference/micrograd` PyTorch ground-truth tests pass (`pytest test/`).
+- Not installed (not needed yet): clojure CLI + JDK — only for `make module-path`
+  once external deps are added.
+- jank gotchas captured in `docs/jank-notes.md`: ASCII-only source, no `--version`
+  (use `check-health`), don't shadow core names you call.
 
 ## Next Steps
-- [ ] Install jank (`make doctor` to check); confirm `make run`/`make repl` work.
-- [ ] Verify the exact jank CLI subcommands in the Makefile against the installed
-      version (`run-main`, `compile-module`, process-exit idiom in test_runner).
-- [ ] Implement `jabla.autograd` (validate against `reference/micrograd`).
-- [ ] Stand up the `sgemm` probe in `cpp/` for the host/device timing split.
+- [ ] Implement `jabla.autograd` (validate against `reference/micrograd`;
+      ground-truth tests already run green in the venv).
+- [ ] Stand up the `sgemm` probe in `cpp/` for the host/device timing split
+      (jank JIT-compiles C++, so interop is viable).
+- [ ] Wire real assertions into `test/jabla/autograd_test.jank` as ops land.
 
 > Local-only project notes live in `private/` (gitignored, not published).

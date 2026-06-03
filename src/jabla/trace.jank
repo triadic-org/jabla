@@ -8,12 +8,12 @@
 ;; synchronous-batch tensor framework expresses awkwardly; Clojure's concurrency
 ;; primitives (atoms/agents/STM/core.async) map onto it directly.
 ;;
-;; Not implemented — design notes only.
+;; Not implemented - design notes only.
 ;; ============================================================================
 
-;; The mechanism — event-driven lazy decay:
+;; The mechanism - event-driven lazy decay:
 ;;   Each synapse stores (trace-value, last-update-tick). Apply
-;;   λ^(now - last-update) ONLY when a synapse is touched by a spike, instead of
+;;   lambda^(now - last-update) ONLY when a synapse is touched by a spike, instead of
 ;;   a dense per-tick sweep. Sparse and SDR-friendly.
 ;;
 ;;     decayed = trace * (pow lambda (- now last-update))
@@ -28,7 +28,7 @@
 ;; Lineage to anchor against: eligibility traces; e-prop (Bellec et al.);
 ;; three-factor learning rules; STDP with trace variables; SDR.
 ;;
-;; Note: online updates have no batch parallelism to hide host latency — measure
+;; Note: online updates have no batch parallelism to hide host latency - measure
 ;; expressiveness and throughput separately.
 
 ;; TODO: implement.

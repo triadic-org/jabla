@@ -26,12 +26,33 @@ Here, `deps.edn` handles path/dep resolution and the Makefile wraps the jank CLI
 calls. With no external deps the module path is just `src:test`, so a JDK /
 Clojure CLI isn't needed to start — the Makefile defaults `MODULE_PATH=src:test`.
 
-## Install — in flux (don't hardcode)
-As of March 2026, packaging is unresolved: LLVM 22 was expected to drop the
-vendored Clang/LLVM requirement and enable package-manager distribution, but
-that **didn't land** (API-compat + perf regressions); the Arch binary package
-was reported broken. No confirmed Homebrew tap in the sources checked.
-→ Expect **build-from-source**; check the jank repo's current install docs.
+## Install
+**There is an official Ubuntu PPA** (supports 24.04 / 24.10 / 25.04) — far
+faster than building from source (the source path needs **LLVM 22**, which isn't
+in Ubuntu's apt, so it compiles LLVM from scratch: 1–2 hours).
+
+Verified working on Ubuntu 24.04 (June 2026):
+```bash
+sudo apt install -y curl gnupg
+curl -s "https://ppa.jank-lang.org/KEY.gpg" | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/jank.gpg >/dev/null
+sudo curl -s -o /etc/apt/sources.list.d/jank.list "https://ppa.jank-lang.org/jank.list"
+sudo apt update && sudo apt install -y jank
+```
+After install, `jank check-health` (≡ `make health`) confirms it can JIT-compile
+C++ and AOT-compile binaries. Source-build instructions:
+https://github.com/jank-lang/jank/blob/main/compiler+runtime/doc/build.md
+
+## Gotchas found locally (jank 0.1-alpha)
+- **The CLI has no `--version`** — use `jank check-health` for diagnostics, or
+  `jank --help` for the version banner + subcommands (`run`, `run-main`, `repl`,
+  `cpp-repl`, `compile`, `compile-module`, `check-health`).
+- **The lexer rejects non-ASCII bytes — even inside comments and strings**
+  (`lex/invalid-unicode: Unfinished character`). Keep `.jank` source ASCII-only:
+  no em-dashes, no `∇`/`λ`/`±`, etc. (Markdown docs are unaffected.)
+- **Don't shadow `clojure.core` names you also call.** Defining `(defn reset! …)`
+  that internally calls core `reset!` resolves to your own fn (arity mismatch →
+  `JIT session error: Symbols not found`). Name helpers distinctly (we use
+  `clear!`).
 
 ## C++ interop
 - All native symbols live under the reserved `cpp/` namespace.

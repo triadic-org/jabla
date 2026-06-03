@@ -6,7 +6,7 @@
 ;; Invoked by `make test` -> jank ... run-main jabla.test-runner.
 
 (defn -main [& _]
-  (t/reset!)
+  (t/clear!)
   (autograd-test/run)
   ;; (other-test/run) ...
   (let [ok? (t/summary!)]

@@ -5,7 +5,7 @@
 ;; Example test for jabla.autograd. The asserted numbers should match
 ;; reference/micrograd/test/test_engine.py (which checks grads against PyTorch).
 ;;
-;; Commented out until autograd.jank is implemented — uncomment and adjust as
+;; Commented out until autograd.jank is implemented - uncomment and adjust as
 ;; the ops land.
 
 (defn run []
@@ -18,4 +18,4 @@
     ;;   ;; d = a*b  ->  da = b = 2.0,  db = a = -4.0
     ;;   (t/approx= 2.0  (ag/grad a) 1e-9)
     ;;   (t/approx= -4.0 (ag/grad b) 1e-9))
-    (t/check true "placeholder — replace with real assertions once ops land")))
+    (t/check true "placeholder - replace with real assertions once ops land")))

@@ -1,7 +1,7 @@
 (ns jabla.test-harness)
 
 ;; Hand-rolled assertions. jank has no user-facing test framework yet, so this
-;; is the substitute — a few macros/fns that track pass/fail counts in an atom
+;; is the substitute - a few macros/fns that track pass/fail counts in an atom
 ;; and print a summary. Deliberately tiny; grow it as you need.
 ;;
 ;; Usage (see jabla.autograd-test for a real example):
@@ -12,7 +12,7 @@
 
 (def ^:private state (atom {:pass 0 :fail 0 :failures []}))
 
-(defn reset! [] (reset! state {:pass 0 :fail 0 :failures []}))
+(defn clear! [] (reset! state {:pass 0 :fail 0 :failures []}))
 
 (defn- record! [ok? msg]
   (if ok?
@@ -36,7 +36,7 @@
   "Assert |a - b| <= tol. For float comparisons against PyTorch/Python ground truth."
   [expected actual tol]
   (check (<= (abs (- (double expected) (double actual))) (double tol))
-         (str "expected ~" expected " (±" tol ") got " actual)))
+         (str "expected ~" expected " (+/-" tol ") got " actual)))
 
 (defmacro deftest
   "Group assertions under a name; prints the name then the body's checks."

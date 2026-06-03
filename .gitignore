@@ -23,6 +23,12 @@ classes/
 # local-only notes (never published)
 /private/
 
+# Python (reference repos + validation venv)
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
 # editor / OS
 .DS_Store
 *.swp
