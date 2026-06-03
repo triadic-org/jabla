@@ -18,45 +18,46 @@
 (def ^:private tape (atom {:nodes [] :grads []}))
 
 (defn reset-tape!
-  "Clear the tape. Call at the start of each test so graphs don't bleed."
+  "Clear the tape. Call (or use a test before-each) so graphs don't bleed."
   []
   (reset! tape {:nodes [] :grads []}))
 
 ;; ---------------------------------------------------------------------------
-;; Handles. A handle is a thin wrapper {:ref idx} around a tape index. We wrap
-;; (rather than pass the bare int) so a handle is distinguishable from a raw
-;; numeric constant in op args -- (mul 2 x) must tell the constant 2 from a node
-;; id. Identity still comes from the index, not object identity; the map is just
-;; a typed pointer.
+;; Values. A "value" is the thing user code holds and ops return: a thin wrapper
+;; {:id index} around a tape index. We wrap (rather than pass the bare int) so a
+;; value is distinguishable from a raw numeric constant in op args -- (mul 2 x)
+;; must tell the constant 2 from a node id. Identity comes from the index, not
+;; object identity; the map is just a typed pointer. (Mirrors micrograd: a
+;; `value` is the object you hold, :data is its scalar.)
 ;; ---------------------------------------------------------------------------
 
 (defn- push-node!
-  "Append node, return its handle."
+  "Append a node to the tape; return a value referencing it."
   [node]
-  (let [idx (count (:nodes @tape))]
+  (let [index (count (:nodes @tape))]
     (swap! tape update :nodes conj node)
-    {:ref idx}))
+    {:id index}))
 
 (defn value
-  "Construct a leaf."
-  [d]
-  (push-node! {:data (double d), :op :leaf, :inputs []}))
+  "Construct a leaf value."
+  [scalar]
+  (push-node! {:data (double scalar), :op :leaf, :inputs []}))
 
-(defn- ->ref
-  "Coerce: a handle passes through; a raw number becomes a leaf (micrograd's
-  __radd__/__rmul__ constant-coercion)."
+(defn- ->value
+  "Coerce to a value: an existing value passes through; a raw number becomes a
+  leaf (micrograd's __radd__/__rmul__ constant coercion)."
   [x]
   (if (map? x) x (value x)))
 
 (defn data
-  "Forward value of a handle."
-  [h]
-  (get-in @tape [:nodes (:ref h) :data]))
+  "Forward scalar held by a value."
+  [v]
+  (get-in @tape [:nodes (:id v) :data]))
 
 (defn grad
-  "Accumulated gradient of a handle (0.0 before backward!)."
-  [h]
-  (get (:grads @tape) (:ref h) 0.0))
+  "Accumulated gradient of a value (0.0 before backward!)."
+  [v]
+  (get (:grads @tape) (:id v) 0.0))
 
 ;; ---------------------------------------------------------------------------
 ;; Small helper: integer power without host Math interop (jank is C++, not JVM,
@@ -64,70 +65,70 @@
 ;; -2 that pow's derivative needs.
 ;; ---------------------------------------------------------------------------
 
-(defn- ipow
-  [base n]
+(defn- int-pow
+  [base exponent]
   (cond
-    (zero? n) 1.0
-    (pos? n)  (reduce * 1.0 (repeat n base))
-    :else     (/ 1.0 (reduce * 1.0 (repeat (- n) base)))))
+    (zero? exponent) 1.0
+    (pos? exponent)  (reduce * 1.0 (repeat exponent base))
+    :else            (/ 1.0 (reduce * 1.0 (repeat (- exponent) base)))))
 
 ;; ===========================================================================
 ;; Ops: forward construction. Each op coerces its args, computes the forward
 ;; value, and records {:data :op :inputs ...}. The backward rule for each op
-;; lives in `local-grads` below.
+;; lives in `compute-local-grads` below.
 ;; ===========================================================================
 
 ;; ---- WORKED EXAMPLE: add. Use this as the template for the rest. ----
 (defn add [x y]
-  (let [a (->ref x)
-        b (->ref y)]
+  (let [a (->value x)
+        b (->value y)]
     (push-node! {:data   (+ (data a) (data b))
                  :op     :add
-                 :inputs [(:ref a) (:ref b)]})))
+                 :inputs [(:id a) (:id b)]})))
 
 (defn mul [x y]
-  (let [a (->ref x)
-        b (->ref y)]
+  (let [a (->value x)
+        b (->value y)]
     (push-node! {:data (* (data a) (data b))
                  :op :mul
-                 :inputs [(:ref a) (:ref b)]})))
+                 :inputs [(:id a) (:id b)]})))
 
 ;; TODO(you): pow*. One value input + a constant integer exponent n. Store n on
-;; the node so the backward rule can read it. forward = (ipow (data a) n).
-;; Node shape: {:data .. :op :pow :inputs [(:ref a)] :n n}
+;; the node so the backward rule can read it. forward = (int-pow (data a) n).
+;; Node shape: {:data .. :op :pow :inputs [(:id a)] :n n}
 (defn pow* [x n]
-  (let [a (->ref x)]
-    (push-node! {:data (ipow (data a) n)
+  (let [a (->value x)]
+    (push-node! {:data (int-pow (data a) n)
                  :op :pow
-                 :inputs [(:ref a) :n n]})))
+                 :inputs [(:id a) :n n]})))
 
 ;; TODO(you): relu. One input. forward = (max 0.0 (data a)).
 (defn relu [x]
-  (let [a (->ref x)]
+  (let [a (->value x)]
     (push-node! {:data (max 0.0 (data a))
                 :op :relu
-                :inputs [(:ref a)]})))
+                :inputs [(:id a)]})))
 
 ;; ---- Derived ops: pure composition, NO new calculus. The chain rule flows
 ;; ---- through the primitives above for free, so these need no local-grads.
 ;; TODO(you): neg = mul by -1 ; sub = a + (neg b) ; div = a * (pow* b -1)
 (defn neg [x]
-  (let [a (->ref x)]
+  (let [a (->value x)]
     (push-node! {:data (* (data a) -1)
                  :op :neg
-                 :inputs [(:ref a)]})))
+                 :inputs [(:id a)]})))
 
 (defn sub [x y]
-  (let [a (->ref x)
-        b (->ref y)]
+  (let [a (->value x)
+        b (->value y)]
     (push-node! {:data (add a (neg b))
                  :op :sub
-                 :inputs [(:ref a) (:ref b)]})))
+                 :inputs [(:id a) (:id b)]})))
 
 (defn div [x y]
-  (let [a (->ref x)
-        b (->ref y)]
-    (push-node! {:data (mul a (ipow b -1))})))
+  (let [a (->value x)
+        b (->value y)]
+    (push-node! {:data (mul a (int-pow b -1))})))
 
 ;; ================================================================
 ;; Keeping the two apart is the whole point: this is just calculus,
@@ -135,81 +136,85 @@
 ;; ================================================================
 
 
-(defn- get-node-data [nodes i]
-  (:data (nth nodes i)))
+(defn- get-node-data [nodes index]
+  (:data (nth nodes index)))
 
 
 (defn- compute-local-grads
-  "Local gradients. local-grads returns {input-index local-partial}, i.e.
-  d(this node's output) w.r.t. each input, IGNORING the upstream grad. backward!
-  multiplies in the upstream grad (the chain rule) and accumulates."
+  "Local gradients for one node: a map {input-index local-derivative}, i.e.
+  d(this node's output) / d(each input), ignoring the upstream gradient.
+  backward! multiplies in the upstream gradient (chain rule) and accumulates."
   [node nodes]
-  (let [ins (:inputs node)]
+  (let [input-indices (:inputs node)]
     (case (:op node)
       :leaf {}
 
       ;; WORKED EXAMPLE: out = a + b  ->  d out/d a = 1, d out/d b = 1
-      :add (let [[a b] ins] {a 1.0, b 1.0})
+      :add (let [[a b] input-indices] {a 1.0, b 1.0})
 
-      ;; TODO(you): out = a * b. Read an input's value with (:data (nth nodes i)).
-      :mul (let [[a b] ins] {a (get-node-data nodes b), b (get-node-data nodes a)})
+      ;; out = a * b  ->  d out/d a = b, d out/d b = a
+      :mul (let [[a b] input-indices] {a (get-node-data nodes b)
+                                       b (get-node-data nodes a)})
 
-      ;; TODO(you): out = a^n, with n = (:n node). Power rule (ipow may help).
+      ;; TODO(you): out = a^n, with n = (:n node). Power rule (int-pow may help).
       ;; :pow ...
 
-      ;; TODO(you): out = relu(a). Gradient flows only where the unit is active;
-      ;; the forward value is already on the node as (:data node).
-      :relu (let [[a] ins] {a (let [val (get-node-data nodes a)]
-                                (if (> val 0) 1 0))})
+      ;; out = relu(a). Gradient flows only where the unit is active.
+      :relu (let [[a] input-indices]
+              {a (let [input-value (get-node-data nodes a)]
+                   (if (> input-value 0) 1 0))})
 
-      (throw (ex-info "local-grads: no rule for op" {:op (:op node)})))))
+      (throw (ex-info "compute-local-grads: no rule for op" {:op (:op node)})))))
 
 ;; ===========================================================================
 ;; Backward. Reverse scan over the tape. Because every input has a lower index
-;; than the op consuming it, walking high->low means a node's own grad is fully
-;; accumulated before we use it to push grads onto its inputs. Recomputed from
-;; scratch each call -> idempotent, no zero_grad footgun.
+;; than the op consuming it, walking high->low means a node's own gradient is
+;; fully accumulated before we use it to push gradients onto its inputs.
+;; Recomputed from scratch each call -> idempotent, no zero_grad footgun.
 ;; ===========================================================================
 
-(defn- make-root-seed
-  "Seed grads vector with root at 1 wrt to itself"
-  [nodes root]
-  (let [n (count nodes)]
-    (assoc (vec (repeat n 0.0))
-           (:ref root)
+(defn- seed-gradients
+  "Gradient vector sized to the tape: all 0.0 except the root, seeded to 1.0
+  (d root / d root)."
+  [nodes root-value]
+  (let [node-count (count nodes)]
+    (assoc (vec (repeat node-count 0.0))
+           (:id root-value)
            1.0)))
 
-(defn- distribute-node-grad
-  "Given global grads and node index, propagate grad[idx] to its inputs"
-  [nodes grads idx]
-  (let [grad (nth grads idx)
-        node (nth nodes idx)
+(defn- accumulate-into-inputs
+  "Push node-index's gradient onto each of its inputs (the chain rule): for
+  every input, add (upstream-gradient * local-derivative) into that input's slot."
+  [nodes gradients node-index]
+  (let [upstream-gradient (nth gradients node-index)
+        node (nth nodes node-index)
         local-grads (compute-local-grads node nodes)]
     (reduce
-     (fn [grads' [input-idx local-deriv]]
-       (let [contrib (* grad local-deriv)
-             curr-input-grad (nth grads' input-idx)
-             new-input-grad (+ curr-input-grad contrib)]
-         (assoc grads' input-idx new-input-grad)))
-     grads
+     (fn [updated-gradients [input-index local-derivative]]
+       (let [contribution      (* upstream-gradient local-derivative)
+             current-input-grad (nth updated-gradients input-index)]
+         (assoc updated-gradients input-index (+ current-input-grad contribution))))
+     gradients
      local-grads)))
 
 (defn- backward-pass
-  "Distribute gradients going through nodes backwards"
-  [nodes seed]
-  (let [last-idx (dec (count nodes))
-        backward-idxs (range last-idx -1 -1)]
+  "Walk the tape newest-to-oldest, accumulating each node's gradient into its
+  inputs. High->low order guarantees a node's gradient is complete before use."
+  [nodes seeded-gradients]
+  (let [last-index           (dec (count nodes))
+        indices-newest-first (range last-index -1 -1)]
     (reduce
-     (fn [grads idx]
-       (distribute-node-grad nodes grads idx))
-     seed
-     backward-idxs)))
+     (fn [gradients node-index]
+       (accumulate-into-inputs nodes gradients node-index))
+     seeded-gradients
+     indices-newest-first)))
 
-(defn backward! 
-  "Multiplies in the upstream grad (the chain rule) and accumulates gradients."
-  [root]
-  (let [nodes (:nodes @tape)
-        seed (make-root-seed nodes root)
-        grads (backward-pass nodes seed)]
-    (swap! tape assoc :grads grads)
-    root))
+(defn backward!
+  "Reverse-mode pass: seed the root at 1.0, accumulate gradients back through the
+  tape, and store them. Recomputed from scratch each call (idempotent)."
+  [root-value]
+  (let [nodes            (:nodes @tape)
+        seeded-gradients (seed-gradients nodes root-value)
+        gradients        (backward-pass nodes seeded-gradients)]
+    (swap! tape assoc :grads gradients)
+    root-value))
