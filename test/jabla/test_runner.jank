@@ -17,5 +17,8 @@
         namespaces (if (seq names) (keep suites names) (vals suites))
         summary    (apply test/run-tests namespaces)
         ok?        (and (zero? (:fail summary)) (zero? (:error summary)))]
-    ;; jank's process-exit story is young; print a marker the Makefile can grep.
-    (println (if ok? "RESULT: PASS" "RESULT: FAIL"))))
+    (println (if ok? "RESULT: PASS" "RESULT: FAIL"))
+    ;; Fail the process on failures/errors so `make test` exits non-zero (CI).
+    ;; jank exits 1 on an uncaught throw; there's no System/exit equivalent yet.
+    (when-not ok?
+      (throw (ex-info "tests failed" (select-keys summary [:fail :error]))))))
