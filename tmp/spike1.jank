@@ -1,0 +1,22 @@
+(ns spike1)
+
+(cpp/raw "#include \"spike1.hpp\"")
+
+(defn matmul-cpp [a b]
+  (let [m (count a)
+        k (count (first a))
+        n (count (first b))
+        a-flat (vec (apply concat a))
+        b-flat (vec (apply concat b))]
+    (cpp/mm_dims m k n)
+    (doseq [i (range (count a-flat))] (cpp/mm_set_a i (nth a-flat i)))
+    (doseq [i (range (count b-flat))] (cpp/mm_set_b i (nth b-flat i)))
+    (cpp/mm_run)
+    (vec (for [i (range m)]
+           (vec (for [j (range n)]
+                  (cpp/mm_get_c (+ (* i n) j))))))))
+
+(println
+ (matmul-cpp [[1.0 2.0 3.0] [4.0 5.0 6.0]]
+             [[7.0 8.0] [9.0 10.0] [11.0 12.0]]))
+;; expect: [[58.0 64.0] [139.0 154.0]]
