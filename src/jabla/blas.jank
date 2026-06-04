@@ -1,4 +1,5 @@
-(ns jabla.blas)
+(ns jabla.blas
+  (:include "jabla_blas.hpp"))
 
 ;; --- sgemm probe (roadmap step 2) ---
 ;; First real C++ interop: compute a matrix multiply via BLAS cblas_sgemm through
@@ -52,5 +53,15 @@
   Once it works, wrap a host (wall-clock) vs device timer around the call -- the
   host/device split the roadmap calls for (device timing arrives with cuBLAS)."
   [a b]
-  (throw (ex-info "blas/sgemm not implemented -- see the steps in the docstring"
-                  {:a a :b b})))
+  (let [m (count a)
+        k (count (first a))
+        n (count (first b))
+        a-flat (vec (apply concat a))
+        b-flat (vec (apply concat b))]
+    (cpp/mm_dims m k n)
+    (doseq [i (range (count a-flat))] (cpp/mm_set_a i (nth a-flat i)))
+    (doseq [i (range (count b-flat))] (cpp/mm_set_b i (nth b-flat i)))
+    (cpp/mm_run)
+    (vec (for [i (range m)]
+           (vec (for [j (range n)]
+                  (cpp/mm_get_c (+ (* i n) j))))))))

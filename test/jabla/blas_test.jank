@@ -21,11 +21,11 @@
 
 ;; --- sgemm vs reference (the interop target) ---
 ;; Uncomment once blas/sgemm is implemented via cpp/ cblas_sgemm.
-;; (deftest sgemm-matches-reference
-;;   (testing "sgemm matches matmul-reference"
-;;     (let [a        [[1.0 2.0 3.0] [4.0 5.0 6.0]]
-;;           b        [[7.0 8.0] [9.0 10.0] [11.0 12.0]]
-;;           expected (blas/matmul-reference a b)
-;;           actual   (blas/sgemm a b)]
-;;       (doseq [i (range 2) j (range 2)]
-;;         (is (approx? (get-in expected [i j]) (get-in actual [i j]) 1e-4))))))
+(deftest sgemm-matches-reference
+  (testing "sgemm matches matmul-reference"
+    (let [a        [[1.0 2.0 3.0] [4.0 5.0 6.0]]
+          b        [[7.0 8.0] [9.0 10.0] [11.0 12.0]]
+          expected (blas/matmul-reference a b)
+          actual   (blas/sgemm a b)]
+      (doseq [i (range 2) j (range 2)]
+        (is (approx? (get-in expected [i j]) (get-in actual [i j]) 1e-4))))))
