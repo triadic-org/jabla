@@ -30,6 +30,14 @@ CXX := clang++
 endif
 CPP_CHECK_FLAGS ?= -std=c++20 -Wall -Wextra -Icpp/include
 
+# C++ interop flags for the jank CLI on run/test/repl/compile: the cpp/include
+# header dir + the OpenBLAS link. jank does NOT search the default linker paths,
+# so -L is required even for a system lib (a bare -lopenblas fails). Override
+# CBLAS_LIBDIR on non-Ubuntu/x86_64 hosts -- find it via:
+#   ldconfig -p | grep libopenblas.so
+CBLAS_LIBDIR   ?= /lib/x86_64-linux-gnu
+JANK_CPP_FLAGS ?= -I cpp/include -L $(CBLAS_LIBDIR) -lopenblas
+
 .PHONY: help repl run test compile clean module-path check-jank check-clojure doctor health lint-ascii lint hooks deps cpp-check check
 
 help:
@@ -49,7 +57,7 @@ help:
 	@echo "  make deps         Install native C++ deps (BLAS, ...) via apt (Linux) / brew (macOS)"
 	@echo "  make clean        Remove build artifacts"
 	@echo ""
-	@echo "  Override vars: JANK=, CLOJURE=, MAIN_NS=, MODULE_PATH="
+	@echo "  Override vars: JANK=, CLOJURE=, MAIN_NS=, MODULE_PATH=, CBLAS_LIBDIR="
 
 check-jank:
 	@command -v $(JANK) >/dev/null 2>&1 || { \
@@ -60,13 +68,13 @@ check-clojure:
 	  echo ">> '$(CLOJURE)' not found (needs a JDK). Only required to recompute module-path."; exit 1; }
 
 repl: check-jank
-	$(JANK) --module-path $(MODULE_PATH) repl
+	$(JANK) $(JANK_CPP_FLAGS) --module-path $(MODULE_PATH) repl
 
 run: lint-ascii check-jank
-	$(JANK) --module-path $(MODULE_PATH) run-main $(MAIN_NS)
+	$(JANK) $(JANK_CPP_FLAGS) --module-path $(MODULE_PATH) run-main $(MAIN_NS)
 
 test: lint-ascii check-jank
-	$(JANK) --module-path $(MODULE_PATH) run-main $(TEST_RUNNER) $(if $(SUITE),-- $(SUITE))
+	$(JANK) $(JANK_CPP_FLAGS) --module-path $(MODULE_PATH) run-main $(TEST_RUNNER) $(if $(SUITE),-- $(SUITE))
 
 # jank's lexer (0.1-alpha) rejects non-ASCII bytes even inside comments/strings.
 # Portable guard (works with GNU and BSD grep — no -P): flag any byte outside
@@ -126,7 +134,7 @@ check: lint-ascii lint cpp-check
 # AOT-compiles a namespace + its deps; `jank compile` builds a project whose
 # entrypoint module has -main (see `jank --help`).
 compile: check-jank
-	$(JANK) --module-path $(MODULE_PATH) compile-module $(MAIN_NS)
+	$(JANK) $(JANK_CPP_FLAGS) --module-path $(MODULE_PATH) compile-module $(MAIN_NS)
 
 module-path: check-clojure
 	@$(CLOJURE) -A:test -Spath
