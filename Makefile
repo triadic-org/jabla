@@ -30,7 +30,7 @@ CXX := clang++
 endif
 CPP_CHECK_FLAGS ?= -std=c++20 -Wall -Wextra -Icpp/include
 
-.PHONY: help repl run test compile clean module-path check-jank check-clojure doctor health lint-ascii lint hooks deps cpp-check
+.PHONY: help repl run test compile clean module-path check-jank check-clojure doctor health lint-ascii lint hooks deps cpp-check check
 
 help:
 	@echo "jabla targets:"
@@ -44,6 +44,7 @@ help:
 	@echo "  make lint-ascii   Fail if any .jank source has non-ASCII bytes (lexer limitation)"
 	@echo "  make lint         Run clj-kondo over the .jank sources (project-wide)"
 	@echo "  make cpp-check    Syntax/type-check cpp/ headers locally with clang (pre-devbox)"
+	@echo "  make check        Run all static checks: lint-ascii + lint + cpp-check"
 	@echo "  make hooks        Install the git pre-commit hook (.githooks)"
 	@echo "  make deps         Install native C++ deps (BLAS, ...) via apt (Linux) / brew (macOS)"
 	@echo "  make clean        Remove build artifacts"
@@ -114,6 +115,12 @@ cpp-check:
 	done; \
 	[ "$$found" = 1 ] || echo "cpp-check: no headers in cpp/include/"; \
 	exit $$status
+
+# Full static-check sweep, used by the pre-commit hook (and suitable for CI). Just
+# composes the independent targets -- lint-ascii / lint / cpp-check stay usable on
+# their own. Needs the C++ toolchain (clang + OpenBLAS headers) for cpp-check.
+check: lint-ascii lint cpp-check
+	@echo "check: all passed"
 
 # AOT — jank can emit statically/dynamically linked executables. `compile-module`
 # AOT-compiles a namespace + its deps; `jank compile` builds a project whose

@@ -4,10 +4,7 @@
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
-echo "[pre-commit] ASCII check (jank lexer rejects non-ASCII)..."
-make -s lint-ascii
-
-echo "[pre-commit] clj-kondo lint..."
-make -s lint
+echo "[pre-commit] make check (ascii + clj-kondo + C++ headers)..."
+make -s check
 
 echo "[pre-commit] ok"
