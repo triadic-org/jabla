@@ -14,7 +14,13 @@ TEST_RUNNER ?= jabla.test-runner
 # and pass the result: `make repl MODULE_PATH="$(make -s module-path)"`.
 MODULE_PATH ?= src:test
 
-.PHONY: help repl run test compile clean module-path check-jank check-clojure doctor health lint-ascii lint hooks
+# Native (C++) dependencies for the cpp/ interop layer (BLAS now; add CUDA/cuBLAS
+# here as the layer grows). Build/run is on the Linux devbox; macOS is kept
+# working for completeness even though it doesn't run jank.
+APT_DEPS  ?= libopenblas-dev
+BREW_DEPS ?= openblas
+
+.PHONY: help repl run test compile clean module-path check-jank check-clojure doctor health lint-ascii lint hooks deps
 
 help:
 	@echo "jabla targets:"
@@ -28,6 +34,7 @@ help:
 	@echo "  make lint-ascii   Fail if any .jank source has non-ASCII bytes (lexer limitation)"
 	@echo "  make lint         Run clj-kondo over the .jank sources (project-wide)"
 	@echo "  make hooks        Install the git pre-commit hook (.githooks)"
+	@echo "  make deps         Install native C++ deps (BLAS, ...) via apt (Linux) / brew (macOS)"
 	@echo "  make clean        Remove build artifacts"
 	@echo ""
 	@echo "  Override vars: JANK=, CLOJURE=, MAIN_NS=, MODULE_PATH="
@@ -66,6 +73,15 @@ lint:
 # Point git at the tracked hooks dir so the pre-commit hook runs for everyone.
 hooks:
 	@git config core.hooksPath .githooks && echo "git hooks installed (core.hooksPath=.githooks)"
+
+# Native C++ dependencies for the cpp/ interop layer (see cpp/README.md). Run on
+# the devbox before the BLAS spike. Extend APT_DEPS / BREW_DEPS as the layer grows.
+deps:
+	@case "$$(uname -s)" in \
+	  Linux)  echo ">> installing via apt: $(APT_DEPS)";  sudo apt-get update && sudo apt-get install -y $(APT_DEPS) ;; \
+	  Darwin) echo ">> installing via brew: $(BREW_DEPS)"; brew install $(BREW_DEPS) ;; \
+	  *)      echo ">> unknown OS; install manually: $(APT_DEPS)"; exit 1 ;; \
+	esac
 
 # AOT — jank can emit statically/dynamically linked executables. `compile-module`
 # AOT-compiles a namespace + its deps; `jank compile` builds a project whose
