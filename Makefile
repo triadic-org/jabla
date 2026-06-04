@@ -20,7 +20,17 @@ MODULE_PATH ?= src:test
 APT_DEPS  ?= libopenblas-dev
 BREW_DEPS ?= openblas
 
-.PHONY: help repl run test compile clean module-path check-jank check-clojure doctor health lint-ascii lint hooks deps
+# Local C++ syntax/type check for cpp/ interop headers (no jank, no link step).
+# For headers that #include <cblas.h>, append the OpenBLAS include dir, e.g.:
+#   make cpp-check CPP_CHECK_FLAGS="-std=c++20 -Wall -Wextra -Icpp/include -I$$(brew --prefix openblas)/include"
+# CXX is a make built-in (often 'c++' = Apple clang, which can't find libc++ on a
+# CLT-only mac); override the built-in default but respect an explicit CXX=... .
+ifeq ($(origin CXX),default)
+CXX := clang++
+endif
+CPP_CHECK_FLAGS ?= -std=c++20 -Wall -Wextra -Icpp/include
+
+.PHONY: help repl run test compile clean module-path check-jank check-clojure doctor health lint-ascii lint hooks deps cpp-check
 
 help:
 	@echo "jabla targets:"
@@ -33,6 +43,7 @@ help:
 	@echo "  make health       Run 'jank check-health' (jank's own install diagnostic)"
 	@echo "  make lint-ascii   Fail if any .jank source has non-ASCII bytes (lexer limitation)"
 	@echo "  make lint         Run clj-kondo over the .jank sources (project-wide)"
+	@echo "  make cpp-check    Syntax/type-check cpp/ headers locally with clang (pre-devbox)"
 	@echo "  make hooks        Install the git pre-commit hook (.githooks)"
 	@echo "  make deps         Install native C++ deps (BLAS, ...) via apt (Linux) / brew (macOS)"
 	@echo "  make clean        Remove build artifacts"
@@ -82,6 +93,27 @@ deps:
 	  Darwin) echo ">> installing via brew: $(BREW_DEPS)"; brew install $(BREW_DEPS) ;; \
 	  *)      echo ">> unknown OS; install manually: $(APT_DEPS)"; exit 1 ;; \
 	esac
+
+# Local pre-flight: syntax/type-check the cpp/ interop headers with clang before
+# they reach the devbox JIT. Header-only (no link), so no libs needed unless a
+# header pulls in <cblas.h> (then extend CPP_CHECK_FLAGS; see above).
+cpp-check:
+	@cxx="$(CXX)"; cflags="$(CPP_CHECK_FLAGS)"; \
+	if [ "$$(uname -s)" = "Darwin" ] && command -v brew >/dev/null 2>&1; then \
+	  llvm="$$(brew --prefix llvm 2>/dev/null)"; \
+	  [ "$$cxx" = "clang++" ] && [ -x "$$llvm/bin/clang++" ] && cxx="$$llvm/bin/clang++"; \
+	  ob="$$(brew --prefix openblas 2>/dev/null)"; \
+	  [ -d "$$ob/include" ] && cflags="$$cflags -I$$ob/include"; \
+	fi; \
+	command -v "$$cxx" >/dev/null 2>&1 || { echo ">> '$$cxx' not found (install clang/LLVM; on macOS: brew install llvm)."; exit 1; }; \
+	echo ">> using $$cxx"; \
+	found=0; status=0; \
+	for h in cpp/include/*.hpp; do \
+	  [ -e "$$h" ] || continue; found=1; echo ">> checking $$h"; \
+	  echo "#include <$$(basename $$h)>" | "$$cxx" $$cflags -x c++ -fsyntax-only - || status=1; \
+	done; \
+	[ "$$found" = 1 ] || echo "cpp-check: no headers in cpp/include/"; \
+	exit $$status
 
 # AOT — jank can emit statically/dynamically linked executables. `compile-module`
 # AOT-compiles a namespace + its deps; `jank compile` builds a project whose

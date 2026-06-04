@@ -19,7 +19,7 @@ inline void mm_set_b(int i, double v) { g_b.at(i) = (float)v; }
 inline double mm_get_c(int i) { return (double)g_c.at(i); }
 
 inline void mm_run() {
-  cblas_sgemm(CblasRowMajor, CblasNoTrans, cBlasNoTrans,
+  cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
               g_m, g_n, g_k, 1.0f,
               g_a.data(), g_k,
               g_b.data(), g_n, 0.0f,
