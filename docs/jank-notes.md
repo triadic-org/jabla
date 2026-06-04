@@ -56,14 +56,48 @@ https://github.com/jank-lang/jank/blob/main/compiler+runtime/doc/build.md
 
 ## C++ interop
 - All native symbols live under the reserved `cpp/` namespace.
-- C/C++ **includes can be part of the `ns` macro**; follows ClojureScript's
-  `:refer-global` for bringing native symbols in.
+- **Include headers via `(:include "foo.h")` in the `ns` macro** (verified
+  2026-06-04): the idiomatic form; multiple strings allowed, and
+  `(:refer-global :only [...])` brings symbols in unqualified. The older
+  `(cpp/raw "#include <foo.h>")` also works (use it for one-off snippets).
 - `cpp/cast` (≈ `static_cast`), `cpp/unsafe-cast` (≈ C-style cast).
 - Manual memory via `cpp/new` / `cpp/delete` (bdwgc GC underneath).
 - A **type-encoding DSL** supports arbitrary C++ types: templates, NTTPs, refs,
   pointers, const/volatile, pointers-to-members, pointers-to-functions — the
   territory cuBLAS/cuDNN APIs live in. Edge cases there still surface bugs.
 - Typed (polymorphic) C++ exception catching works.
+
+### Interop gotchas (verified 2026-06-04, building the BLAS sgemm path)
+- **Only primitives cross the boundary cleanly.** A jank double/int converts to
+  C++ and back automatically. C++ objects/references do NOT: an expression
+  returning e.g. `std::ostream&` gives `analyze/invalid-conversion: ... not
+  convertible to a jank runtime object`. Run side-effecting statements via
+  `(cpp/raw "...;")` so nothing crosses back.
+- **Heavily-overloaded C++ functions don't resolve.** `(cpp/std.sqrt 16.0)` fails
+  `analyze/invalid-cpp-function-call: ambiguous` even with `(cpp/cast cpp/double
+  ...)` — a jank value matches several overloads and the resolver doesn't fully
+  tie-break. Prefer single-signature functions (your own wrappers, or C APIs like
+  `cblas_*`); reach for `cpp/cast` only when forced.
+- **C++ UB hard-crashes the whole jank process** (the JIT runs in-process), so a
+  `std::vector` out-of-bounds via `operator[]` is a silent segfault. Use `.at()`
+  while bringing interop up so it throws a *catchable* C++ exception instead; swap
+  back to `[]` once indexing is trusted.
+- **Header-only helpers: mark functions/globals `inline`** (C++17) — standard
+  header-only idiom; one shared instance, no ODR issues across the translation
+  units jank's JIT creates.
+
+## Building / linking native libs (verified 2026-06-04)
+jank CLI flags go **before** the subcommand: `jank -I <dir> -L <dir> -lfoo run ...`.
+- `-I` / `--include-dir` for headers (system headers in default dirs, e.g.
+  `cblas.h` in `/usr/include/x86_64-linux-gnu`, are found without `-I`).
+- `-L` / `--library-dir` and `-l<name>` to link a shared lib.
+- **jank does NOT search the default linker/ldconfig paths.** A bare `-lopenblas`
+  fails with `Failed to load dynamic library`; pass `-L <dir> -lopenblas` (or a
+  full path: `-l /lib/x86_64-linux-gnu/libopenblas.so`). Find the dir with
+  `ldconfig -p | grep libopenblas.so`.
+- Wired in the Makefile as `JANK_CPP_FLAGS` (`-I cpp/include -L $(CBLAS_LIBDIR)
+  -lopenblas`) on `run`/`test`/`repl`/`compile`, with a `check-blas` preflight
+  that points at `make deps` if the lib is missing.
 
 ## REPL / editor
 - **nREPL server works** — tested with NeoVim/Conjure and Emacs/CIDER.
@@ -83,8 +117,11 @@ https://github.com/jank-lang/jank/blob/main/compiler+runtime/doc/build.md
 - No jank-specific **linter/formatter**. We lint with **clj-kondo** (native binary,
   no JVM) treating `.jank` as `clj` — `make lint` mirrors the sources to `.clj`
   for project-wide analysis. Config in `.clj-kondo/config.edn`. The one blind
-  spot is `cpp/` interop forms (clj-kondo can't model them; the `cpp` namespace
-  is excluded in config). `make hooks` installs a pre-commit hook (ASCII + lint).
+  spots are jank's `cpp/` interop forms and its extended `ns` clauses
+  (`:include` / `:refer-global`) — handled in `.clj-kondo/config.edn` by excluding
+  `cpp` from `:unresolved-namespace` and turning off `:unknown-ns-option`.
+  `make hooks` installs a pre-commit hook that runs `make check` (ASCII + lint +
+  `cpp-check`).
 
 ## Sources
 - jank clojure-cli docs: https://github.com/jank-lang/jank/blob/main/clojure-cli/README.md
