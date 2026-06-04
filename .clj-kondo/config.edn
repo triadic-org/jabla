@@ -7,7 +7,12 @@
 {:linters
  {;; `cpp/` is jank's reserved C++ interop namespace — not a real Clojure ns, so
   ;; clj-kondo can't resolve it. Exclude it (covers cpp/new, cpp/cast, etc.).
-  :unresolved-namespace {:exclude [cpp]}}
+  :unresolved-namespace {:exclude [cpp]}
+
+  ;; jank extends the `ns` form with C++ interop clauses (:include, :refer-global)
+  ;; that clj-kondo doesn't model. Disable the check so they don't trip lint.
+  ;; (Trade-off: genuine ns-option typos won't be flagged.)
+  :unknown-ns-option {:level :off}}
 
  ;; Namespace-scoped overrides (don't touch the source files).
  :config-in-ns
