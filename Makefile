@@ -38,7 +38,7 @@ CPP_CHECK_FLAGS ?= -std=c++20 -Wall -Wextra -Icpp/include
 CBLAS_LIBDIR   ?= /lib/x86_64-linux-gnu
 JANK_CPP_FLAGS ?= -I cpp/include -L $(CBLAS_LIBDIR) -lopenblas
 
-.PHONY: help repl run test compile clean module-path check-jank check-clojure doctor health lint-ascii lint hooks deps cpp-check check
+.PHONY: help repl run test compile clean module-path check-jank check-blas check-clojure doctor health lint-ascii lint hooks deps cpp-check check
 
 help:
 	@echo "jabla targets:"
@@ -67,13 +67,26 @@ check-clojure:
 	@command -v $(CLOJURE) >/dev/null 2>&1 || { \
 	  echo ">> '$(CLOJURE)' not found (needs a JDK). Only required to recompute module-path."; exit 1; }
 
+# Preflight: fail with a clear message if OpenBLAS isn't installed, instead of
+# jank's opaque "Failed to load dynamic library" when jabla.blas loads. Gated on
+# run/test/compile (which load blas-dependent code); repl is left ungated so you
+# can poke non-blas code without OpenBLAS present.
+check-blas:
+	@if [ -e "$(CBLAS_LIBDIR)/libopenblas.so" ] \
+	   || { command -v ldconfig >/dev/null 2>&1 && ldconfig -p 2>/dev/null | grep -q libopenblas; } \
+	   || { [ "$$(uname -s)" = Darwin ] && [ -e "$$(brew --prefix openblas 2>/dev/null)/lib/libopenblas.dylib" ]; }; then \
+	  :; \
+	else \
+	  echo ">> OpenBLAS not found (needed by jabla.blas). Run 'make deps' to install it."; exit 1; \
+	fi
+
 repl: check-jank
 	$(JANK) $(JANK_CPP_FLAGS) --module-path $(MODULE_PATH) repl
 
-run: lint-ascii check-jank
+run: lint-ascii check-jank check-blas
 	$(JANK) $(JANK_CPP_FLAGS) --module-path $(MODULE_PATH) run-main $(MAIN_NS)
 
-test: lint-ascii check-jank
+test: lint-ascii check-jank check-blas
 	$(JANK) $(JANK_CPP_FLAGS) --module-path $(MODULE_PATH) run-main $(TEST_RUNNER) $(if $(SUITE),-- $(SUITE))
 
 # jank's lexer (0.1-alpha) rejects non-ASCII bytes even inside comments/strings.
@@ -133,7 +146,7 @@ check: lint-ascii lint cpp-check
 # AOT — jank can emit statically/dynamically linked executables. `compile-module`
 # AOT-compiles a namespace + its deps; `jank compile` builds a project whose
 # entrypoint module has -main (see `jank --help`).
-compile: check-jank
+compile: check-jank check-blas
 	$(JANK) $(JANK_CPP_FLAGS) --module-path $(MODULE_PATH) compile-module $(MAIN_NS)
 
 module-path: check-clojure
