@@ -6,6 +6,10 @@
 static std::vector<float> g_a, g_b, g_c;
 static int g_m, g_k, g_n;
 
+void mm_set_a(int i, double v) { g_a.at(i) = (float)v; } // <- mm_set_a
+void mm_set_b(int i, double v) { g_b.at(i) = (float)v; } // <- mm_set_b
+double mm_get_c(int i) { return (double)g_c.at(i); } // <- mm_get_c (getter!)
+
 void mm_dims(int m, int k, int n) {
   g_m = m; g_k = k; g_n = n;
   g_a.assign(m*k, 0.0f);
