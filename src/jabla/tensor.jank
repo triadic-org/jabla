@@ -1,27 +1,98 @@
 (ns jabla.tensor)
 
 ;; ============================================================================
-;; Tensors with autograd, on native BLAS. Lifts jabla.autograd from scalars to
-;; arrays. References: reference/makemore/ and reference/nanoGPT/model.py
+;; Tensors with autograd, on native BLAS. Roadmap step 3: lift jabla.autograd
+;; from scalars to arrays. Validators: one attention block matches PyTorch
+;; element-wise; end-to-end, nanoGPT's loss-per-step curve on TinyShakespeare
+;; (log to experiments/). References: reference/llm.c, reference/nanoGPT.
 ;;
-;; Depends on a working BLAS/cuBLAS sgemm through cpp/ interop (see cpp/README.md).
-;;
-;; Not implemented - design notes only.
+;; Step 2 (blas/sgemm) has landed, so matmul has a native kernel to call.
+;; SCAFFOLD ONLY -- the op forwards and the tensor-level backward are the work.
 ;; ============================================================================
 
-;; Open questions to resolve here:
+;; --- Representation (decided) -----------------------------------------------
+;; A tensor is a jank map: {:shape [d0 d1 ...] :dtype :f32 :store <storage>}.
+;;   - :dtype is :f32 in the buffer (matches sgemm and the GPU end-state); the
+;;     jank API speaks doubles and narrows at the boundary. Carry :dtype so
+;;     fp16/bf16 become a storage change later, not a rewrite.
+;;   - :store is the bulk data. TARGET = a native float32 buffer that C++ owns and
+;;     jank references by handle (data lives in C++, exactly like blas/sgemm's
+;;     buffers; a cpp/include/jabla_tensor.hpp buffer layer, analogous to
+;;     jabla_blas.hpp).
 ;;
-;;   - Storage: a flat native buffer (cpp/-allocated float*) + shape/stride
-;;     metadata in a jank map/record, vs. backing onto a C++ tensor type via the
-;;     interop type DSL. The former keeps the Clojure side in control; the
-;;     latter leans on C++ but couples to a library's layout.
-;;   - Autograd reuse: the tape/graph design from jabla.autograd should extend
-;;     to tensor ops - each op records its local vjp. The single-tape strategy
-;;     scales best here.
-;;   - Ops for a GPT: matmul, add/broadcast, softmax, layernorm, gelu, embedding
-;;     lookup, cross-entropy. Start with matmul (the sgemm).
-;;   - Numerical validation: match one attention block to PyTorch element-wise
-;;     before trusting the stack; nanoGPT's loss-per-step curve on TinyShakespeare
-;;     is the end-to-end check (log to experiments/).
+;; BRING-UP SHORTCUT (recommended first cut): make :store a flat jank vector of
+;; doubles. That gets the API + the autograd tape shape correct with zero pointer
+;; interop, lets you validate against PyTorch, THEN swap :store for native buffers
+;; for speed. One unknown at a time -- the same method as the sgemm spikes.
 
-;; TODO: implement after the sgemm probe lands.
+;; --- Autograd (the core design task) ----------------------------------------
+;; Reuse jabla.autograd's tape, generalized: a node carries a *tensor* payload and
+;; a local vjp (vector-Jacobian product) instead of a scalar partial. Each op
+;; records {forward-tensor, input-ids, vjp}; backward is the same reverse scan,
+;; but each step pushes a tensor gradient into its inputs and accumulates.
+;;   Key insight: matmul's vjp is itself two matmuls of the upstream gradient with
+;;   the inputs (work out which sides/transposes) -- so backward *also* routes
+;;   through blas/sgemm. Derive the rest the same way you did the scalar ops.
+;; See docs/autograd-references.md (the flat-tape / vjp design).
+
+;; --- Public surface (names + contracts; the impls are yours) -----------------
+;; NOTE: matmul's forward will (:require [jabla.blas :as blas]) -- add it then.
+
+(defn tensor
+  "Construct a tensor from nested jank vectors (row-major); infer :shape."
+  [_nested]
+  (throw (ex-info "jabla.tensor/tensor not implemented" {})))
+
+(defn shape
+  "Vector of dimension sizes."
+  [_t]
+  (throw (ex-info "not implemented" {})))
+
+(defn dtype
+  "Element type keyword (:f32 to start)."
+  [_t]
+  (throw (ex-info "not implemented" {})))
+
+(defn ->vectors
+  "Read a tensor back into nested jank vectors (for tests / debugging)."
+  [_t]
+  (throw (ex-info "not implemented" {})))
+
+;; --- Ops: start with matmul + add; the rest follow the same forward+vjp shape --
+
+(defn matmul
+  "a (m x k) . b (k x n) -> (m x n). Forward routes through blas/sgemm; records a
+  node whose vjp is two matmuls of the upstream gradient with a and b."
+  [_a _b]
+  (throw (ex-info "not implemented -- forward via blas/sgemm" {})))
+
+(defn add
+  "Elementwise add (with broadcasting). vjp passes the gradient through (mind the
+  broadcast axes: sum the gradient back down to each input's shape)."
+  [_a _b]
+  (throw (ex-info "not implemented" {})))
+
+;; TODO(you): the GPT op set, each = forward + vjp, validated vs PyTorch:
+;;   mul, relu/gelu, softmax, layernorm, embedding lookup, cross-entropy.
+
+;; --- Backward ----------------------------------------------------------------
+
+(defn backward!
+  "Seed the root gradient (ones), reverse-scan the tape, accumulate tensor
+  gradients into each node's inputs (same structure as jabla.autograd/backward!)."
+  [_root]
+  (throw (ex-info "not implemented" {})))
+
+(defn grad
+  "Accumulated gradient tensor for a leaf (after backward!)."
+  [_t]
+  (throw (ex-info "not implemented" {})))
+
+;; --- First milestone (suggested order) --------------------------------------
+;; 1. :store as flat doubles; implement tensor / shape / dtype / ->vectors.
+;; 2. matmul forward via blas/sgemm; check vs blas/matmul-reference.
+;; 3. add forward + tape recording for both ops.
+;; 4. backward! for matmul + add; gradient-check via finite differences (reuse
+;;    the grad-check idea from test/jabla/autograd_test.jank) before trusting it.
+;; 5. then the rest of the op set, building toward one attention block vs PyTorch.
+;; 6. swap :store from flat doubles to native float32 buffers for speed.
