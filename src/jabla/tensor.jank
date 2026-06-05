@@ -67,11 +67,17 @@
   "Reshape a row-major element sequence into nested vectors of `shape`.
     Flattens m first, so input shape doesn't matter (core.matrix semantics)."
   [m shape]
-  (let [flat (vec (flatten m))]
+  (let [flat (vec (flatten m))
+        n    (count flat)]
     (letfn [(build [offset dims]
               (if (= 1 (count dims))
-                (subvec flat offset (+ offset (first dims)))
-                (let [inner (reduce *  1 (rest dims))]
+                ;; leaf: read shape's worth of elements, zero-padding past the end
+                ;; (so we both truncate long input and pad short input -- core.matrix)
+                (mapv (fn [i]
+                        (let [j (+ offset i)]
+                          (if (< j n) (nth flat j) 0.0)))
+                      (range (first dims)))
+                (let [inner (reduce * 1 (rest dims))]
                   (mapv (fn [i] (build (+ offset (* i inner)) (rest dims)))
                         (range (first dims))))))]
       (build 0 shape))))
