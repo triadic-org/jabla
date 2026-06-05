@@ -64,8 +64,19 @@
   (:dtype t))
 
 (defn reshape
-  "Reshape a vector into a given shape"
+  "Reshape a row-major element sequence into nested vectors of `shape`.
+    Flattens m first, so input shape doesn't matter (core.matrix semantics)."
   [m shape]
+  (let [flat (vec (flatten m))]
+    (letfn [(build [offset dims]
+              (if (= 1 (count dims))
+                (subvec flat offset (+ offset (first dims)))
+                (let [inner (reduce *  1 (rest dims))]
+                  (mapv (fn [i] (build (+ offset (* i inner)) (rest dims)))
+                        (range (first dims))))))]
+      (build 0 shape)))
+
+
   ;; Go through shape vector in reverse, building from val -> vec -> vec[vec]
   (loop [m' m
          dims (reverse (rest shape))]
