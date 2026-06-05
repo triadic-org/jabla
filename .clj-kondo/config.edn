@@ -19,4 +19,7 @@
  {;; The test exercises jabla.autograd; its require is intentional even while the
   ;; assertion bodies are commented out (pre-implementation). Re-enable once the
   ;; ops land and the calls are uncommented.
-  jabla.autograd-test {:linters {:unused-namespace {:level :off}}}}}
+  jabla.autograd-test {:linters {:unused-namespace {:level :off}}}
+  ;; tensor-test requires jabla.tensor / test-util while its bodies are still
+  ;; commented (uncomment-as-you-go scaffold). Drop this once the ops land.
+  jabla.tensor-test {:linters {:unused-namespace {:level :off}}}}}

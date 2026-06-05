@@ -1,0 +1,63 @@
+(ns jabla.tensor-test
+  (:require [clojure.test :refer [deftest is testing]]
+            [jabla.tensor :as tt]
+            [jabla.test-util :as tu]))
+
+;; Uncomment-as-you-go guide for jabla.tensor (roadmap step 3). Each deftest
+;; mirrors a step in tensor.jank's milestone order. Bodies are commented while
+;; the ops are unimplemented; each test passes vacuously via (is true). As you
+;; implement a step, uncomment its body and delete the (is true).
+;;
+;; Run just this suite:  make test SUITE=tensor
+;; Float comparisons go through tu/approx? (1e-4 for f32 round-trips, tighter for
+;; pure-jank paths). The human label lives in each (testing "...") block.
+
+;; --- Milestone 1: construction + readback ---
+(deftest tensor-construct
+  (testing "tensor / shape / dtype / ->vectors round-trip"
+    ;; (let [t (tt/tensor [[1.0 2.0 3.0] [4.0 5.0 6.0]])]
+    ;;   (is (= [2 3] (tt/shape t)))
+    ;;   (is (= :f32 (tt/dtype t)))
+    ;;   (is (tu/approx? 5.0 (get-in (tt/->vectors t) [1 1]) 1e-6)))
+    (is true)))
+
+;; --- Milestone 2: matmul forward (vs the proven blas/matmul-reference) ---
+(deftest matmul-forward
+  (testing "matmul matches blas/matmul-reference (2x3 . 3x2)"
+    ;; (let [a (tt/tensor [[1.0 2.0 3.0] [4.0 5.0 6.0]])
+    ;;       b (tt/tensor [[7.0 8.0] [9.0 10.0] [11.0 12.0]])
+    ;;       c (tt/->vectors (tt/matmul a b))]
+    ;;   (is (tu/approx? 58.0  (get-in c [0 0]) 1e-4))
+    ;;   (is (tu/approx? 64.0  (get-in c [0 1]) 1e-4))
+    ;;   (is (tu/approx? 139.0 (get-in c [1 0]) 1e-4))
+    ;;   (is (tu/approx? 154.0 (get-in c [1 1]) 1e-4)))
+    (is true)))
+
+;; --- Milestone 3: elementwise add forward ---
+(deftest add-forward
+  (testing "elementwise add"
+    ;; (let [a (tt/tensor [[1.0 2.0] [3.0 4.0]])
+    ;;       b (tt/tensor [[10.0 20.0] [30.0 40.0]])
+    ;;       c (tt/->vectors (tt/add a b))]
+    ;;   (is (tu/approx? 11.0 (get-in c [0 0]) 1e-6))
+    ;;   (is (tu/approx? 44.0 (get-in c [1 1]) 1e-6)))
+    (is true)))
+
+;; --- Milestone 4: backward (tensor gradient-check) ---
+;; The tensor analogue of autograd's grad-check: perturb each input element by +-h,
+;; compare backward!'s analytic grad to the central finite difference of a scalar
+;; reduction (e.g. sum) of the output. Build a small helper like test-util/grad-check
+;; but over tensor elements.
+(deftest matmul-backward
+  (testing "matmul gradients vs finite differences"
+    ;; (let [a (tt/tensor [[1.0 2.0] [3.0 4.0]])
+    ;;       b (tt/tensor [[5.0 6.0] [7.0 8.0]])
+    ;;       y (tt/matmul a b)]
+    ;;   (tt/backward! y)
+    ;;   ;; for d(sum y)/da: each element of (tt/grad a) ~ finite diff of sum(matmul)
+    ;;   (is ...))
+    (is true)))
+
+;; --- Milestone 5+: GPT op set (mul, relu/gelu, softmax, layernorm, embedding,
+;; cross-entropy), then one attention block element-wise vs PyTorch. Add deftests
+;; here as each op + its vjp lands.

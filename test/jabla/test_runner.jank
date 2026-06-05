@@ -1,7 +1,8 @@
 (ns jabla.test-runner
   (:require [clojure.test :as test]
             [jabla.autograd-test]
-            [jabla.blas-test]))
+            [jabla.blas-test]
+            [jabla.tensor-test]))
 
 ;; Runs the suites via clojure.test. Invoked by `make test` ->
 ;; jank ... run-main jabla.test-runner [suite].
@@ -10,7 +11,8 @@
 
 (def ^:private suites
   {"autograd" 'jabla.autograd-test
-   "blas"     'jabla.blas-test})
+   "blas"     'jabla.blas-test
+   "tensor"   'jabla.tensor-test})
 
 (defn -main [& args]
   (let [names     (filter seq args)                        ; ignore blank/""
