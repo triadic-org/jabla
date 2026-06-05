@@ -74,15 +74,7 @@
                 (let [inner (reduce *  1 (rest dims))]
                   (mapv (fn [i] (build (+ offset (* i inner)) (rest dims)))
                         (range (first dims))))))]
-      (build 0 shape)))
-
-
-  ;; Go through shape vector in reverse, building from val -> vec -> vec[vec]
-  (loop [m' m
-         dims (reverse (rest shape))]
-    (if (empty? dims) (vec m')
-        (recur (mapv vec (partition (first dims) m'))
-               (rest dims)))))
+      (build 0 shape))))
 
 (defn ->vectors
   "Read a tensor back into nested jank vectors (for tests / debugging)."
