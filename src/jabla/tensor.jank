@@ -50,7 +50,7 @@
   (let [shape (shape-of v)
         t-id (cpp/createTensor (-> v flatten vec))]
     {:shape shape
-     :dtype :f332
+     :dtype :f32
      :id t-id}))
 
 (defn get-shape
