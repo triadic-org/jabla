@@ -68,10 +68,10 @@
   [m shape]
   ;; Go through shape vector in reverse, building from val -> vec -> vec[vec]
   (loop [m' m
-         dims (rseq shape)]
-    (if (empty? dims) m'
-        (let [d (first dims)]
-          (recur (partition d m') (rest dims))))))
+         dims (reverse (rest shape))]
+    (if (empty? dims) (vec m')
+        (recur (mapv vec (partition (first dims) m'))
+               (rest dims)))))
 
 (defn ->vectors
   "Read a tensor back into nested jank vectors (for tests / debugging)."
