@@ -48,7 +48,7 @@
   "Construct a tensor from nested jank vectors (row-major); infer :shape."
   [v]
   (let [shape (shape-of v)
-        t-id (cpp/createTensor (flatten v))]
+        t-id (cpp/createTensor (-> v flatten vec))]
     {:shape shape
      :dtype :f332
      :id t-id}))
