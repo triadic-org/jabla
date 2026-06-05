@@ -15,11 +15,10 @@
 ;; --- Milestone 1: construction + readback ---
 (deftest tensor-construct
   (testing "tensor / shape / dtype / ->vectors round-trip"
-    ;; (let [t (tt/tensor [[1.0 2.0 3.0] [4.0 5.0 6.0]])]
-    ;;   (is (= [2 3] (tt/shape t)))
-    ;;   (is (= :f32 (tt/dtype t)))
-    ;;   (is (tu/approx? 5.0 (get-in (tt/->vectors t) [1 1]) 1e-6)))
-    (is true)))
+    (let [t (tt/->tensor [[1.0 2.0 3.0] [4.0 5.0 6.0]])]
+      (is (= [2 3] (tt/get-shape t)))
+      (is (= :f32 (tt/get-dtype t)))
+      (is (tu/approx? 5.0 (get-in (tt/->vectors t) [1 1]) 1e-6)))))
 
 ;; --- Milestone 2: matmul forward (vs the proven blas/matmul-reference) ---
 (deftest matmul-forward

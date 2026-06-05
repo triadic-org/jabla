@@ -1,4 +1,5 @@
-(ns jabla.tensor)
+(ns jabla.tensor
+  (:include "tensor.hpp"))
 
 ;; ============================================================================
 ;; Tensors with autograd, on native BLAS. Roadmap step 3: lift jabla.autograd
@@ -37,26 +38,41 @@
 
 ;; --- Public surface (names + contracts; the impls are yours) -----------------
 ;; NOTE: matmul's forward will (:require [jabla.blas :as blas]) -- add it then.
+;
+(defn- shape-of
+  "Iterate through first element of each nested depth of vector to infer shape"
+  [v]
+  (->> v (iterate first) (take-while vector?) (mapv count)))
 
-(defn tensor
+(defn ->tensor
   "Construct a tensor from nested jank vectors (row-major); infer :shape."
-  [_nested]
-  (throw (ex-info "jabla.tensor/tensor not implemented" {})))
+  [v]
+  (let [shape (shape-of v)
+        t-id (cpp/createTensor (flatten v))]
+    {:shape shape
+     :dtype :f332
+     :id t-id}))
 
-(defn shape
+(defn get-shape
   "Vector of dimension sizes."
-  [_t]
-  (throw (ex-info "not implemented" {})))
+  [t]
+  (:shape t))
 
-(defn dtype
+(defn get-dtype
   "Element type keyword (:f32 to start)."
-  [_t]
-  (throw (ex-info "not implemented" {})))
+  [t]
+  (:dtype t))
+
+(defn reshape
+  "Reshape a vector into a given shape"
+  [m _]
+  m)
 
 (defn ->vectors
   "Read a tensor back into nested jank vectors (for tests / debugging)."
-  [_t]
-  (throw (ex-info "not implemented" {})))
+  [t]
+  (let [raw-v (-> t :id cpp/getTensor)]
+    (reshape raw-v (get-shape t))))
 
 ;; --- Ops: start with matmul + add; the rest follow the same forward+vjp shape --
 

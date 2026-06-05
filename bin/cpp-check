@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Syntax/type-check the cpp/ interop headers locally with clang -- no jank, no
+# link step. Catches compile/type/narrowing errors before the devbox JIT. The
+# compiler + OpenBLAS include are resolved by bin/cpp-toolchain (brew clang on a
+# CLT-only mac, etc.). Run via `make cpp-check` or directly: `bin/cpp-check`.
+set -uo pipefail
+cd "$(dirname "$0")/.."
+
+cxx="${CXX:-clang++}"
+cflags="${CPP_CHECK_FLAGS:--std=c++20 -Wall -Wextra -Icpp/include}"
+libdir="${CBLAS_LIBDIR:-/lib/x86_64-linux-gnu}"
+eval "$(bin/cpp-toolchain "$cxx" "$cflags" "$libdir")"
+
+command -v "$CPP_CXX" >/dev/null 2>&1 || {
+  echo ">> '$CPP_CXX' not found (install clang/LLVM; on macOS: brew install llvm)."
+  exit 1
+}
+echo ">> using $CPP_CXX"
+
+found=0
+status=0
+for h in cpp/include/*.hpp; do
+  [ -e "$h" ] || continue
+  found=1
+  echo ">> checking $h"
+  echo "#include <$(basename "$h")>" | "$CPP_CXX" $CPP_CFLAGS -x c++ -fsyntax-only - || status=1
+done
+[ "$found" = 1 ] || echo "cpp-check: no headers in cpp/include/"
+exit "$status"

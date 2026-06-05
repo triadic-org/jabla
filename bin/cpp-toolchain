@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Resolve the local C++ toolchain for `make cpp-check` / `make cpp-test` -- one
+# detector shared by both (DRY). Args: CXX CFLAGS CBLAS_LIBDIR.
+#
+# Emits shell assignments to eval, e.g.:
+#   eval "$(bin/cpp-toolchain "$(CXX)" "$(CPP_CHECK_FLAGS)" "$(CBLAS_LIBDIR)")"
+# Sets:
+#   CPP_CXX     - compiler (brew clang on a CLT-only mac, which finds libc++)
+#   CPP_CFLAGS  - compile flags (+ brew openblas include on mac)
+#   CPP_LFLAGS  - link flags (openblas when present; empty otherwise)
+set -u
+
+cxx="$1"; cflags="$2"; libdir="$3"; lflags=""
+
+if [ "$(uname -s)" = Darwin ] && command -v brew >/dev/null 2>&1; then
+  llvm="$(brew --prefix llvm 2>/dev/null || true)"
+  [ "$cxx" = clang++ ] && [ -x "$llvm/bin/clang++" ] && cxx="$llvm/bin/clang++"
+  ob="$(brew --prefix openblas 2>/dev/null || true)"
+  [ -n "$ob" ] && [ -d "$ob/include" ] && cflags="$cflags -I$ob/include"
+  [ -n "$ob" ] && [ -d "$ob/lib" ] && lflags="-L$ob/lib -lopenblas"
+elif [ -e "$libdir/libopenblas.so" ]; then
+  lflags="-L$libdir -lopenblas"
+fi
+
+printf 'CPP_CXX=%q\nCPP_CFLAGS=%q\nCPP_LFLAGS=%q\n' "$cxx" "$cflags" "$lflags"

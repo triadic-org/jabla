@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Compile + run the cpp/ unit tests locally (no jank), using doctest. Catches C++
+# logic bugs (the class that cost a devbox round-trip in the BLAS spike) in the
+# fast clang loop. Links OpenBLAS when present (for matmul tests). Compiler/flags
+# resolved by bin/cpp-toolchain. Run via `make cpp-test` or directly.
+set -uo pipefail
+cd "$(dirname "$0")/.."
+
+cxx="${CXX:-clang++}"
+cflags="${CPP_CHECK_FLAGS:--std=c++20 -Wall -Wextra -Icpp/include}"
+libdir="${CBLAS_LIBDIR:-/lib/x86_64-linux-gnu}"
+eval "$(bin/cpp-toolchain "$cxx" "$cflags" "$libdir")"
+
+command -v "$CPP_CXX" >/dev/null 2>&1 || { echo ">> '$CPP_CXX' not found"; exit 1; }
+
+tmpbin="$(mktemp)"
+trap 'rm -f "$tmpbin"' EXIT
+
+found=0
+status=0
+for t in cpp/test/*.cpp; do
+  [ -e "$t" ] || continue
+  found=1
+  echo ">> $t"
+  "$CPP_CXX" $CPP_CFLAGS $CPP_LFLAGS "$t" -o "$tmpbin" && "$tmpbin" || status=1
+done
+[ "$found" = 1 ] || echo "cpp-test: no tests in cpp/test/"
+exit "$status"
