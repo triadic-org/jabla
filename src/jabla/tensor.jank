@@ -65,8 +65,13 @@
 
 (defn reshape
   "Reshape a vector into a given shape"
-  [m _]
-  m)
+  [m shape]
+  ;; Go through shape vector in reverse, building from val -> vec -> vec[vec]
+  (loop [m' m
+         dims (rseq shape)]
+    (if (empty? dims) m'
+        (let [d (first dims)]
+          (recur (partition d m') (rest dims))))))
 
 (defn ->vectors
   "Read a tensor back into nested jank vectors (for tests / debugging)."

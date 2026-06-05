@@ -20,6 +20,54 @@
       (is (= :f32 (tt/get-dtype t)))
       (is (tu/approx? 5.0 (get-in (tt/->vectors t) [1 1]) 1e-6)))))
 
+;; --- Milestone 1 (helper): reshape ------------------------------------------
+;; reshape is pure jank (no cpp), so TDD it fully before wiring ->vectors. The
+;; signature + semantics deliberately track clojure.core.matrix/reshape so this
+;; can be contributed upstream: arglist [m shape], row-major traversal regardless
+;; of m's current shape, truncate when shape is smaller, zero-pad when larger.
+;; reshape moves elements only (no arithmetic), so compare with exact = -- a
+;; stronger assertion than approx?. (Vector-vs-seq compares equal under Clojure's
+;; sequential =, but reshape should still return real vectors for the store.)
+;;
+;; Scope: tensors are rank >= 1 here, so rank-0 (shape []) -- core.matrix's scalar
+;; case, where shape returns nil -- is intentionally unsupported / untested for
+;; now. Defensive inputs (negative dims, non-numeric, nil) are also left untested:
+;; no contract is promised for them yet, so testing would just pin accidental
+;; behavior. Add such tests only alongside a deliberate {:pre}/throw.
+(deftest reshape-row-major
+  (testing "1-D: shape [n] is just the flat vector"
+    (is (= [1.0 2.0 3.0] (tt/reshape [1.0 2.0 3.0] [3]))))
+  (testing "2-D row-major, both groupings"
+    (is (= [[1.0 2.0 3.0] [4.0 5.0 6.0]]
+           (tt/reshape [1.0 2.0 3.0 4.0 5.0 6.0] [2 3])))
+    (is (= [[1.0 2.0] [3.0 4.0] [5.0 6.0]]
+           (tt/reshape [1.0 2.0 3.0 4.0 5.0 6.0] [3 2]))))
+  (testing "row / column vectors"
+    (is (= [[1.0 2.0 3.0]] (tt/reshape [1.0 2.0 3.0] [1 3])))
+    (is (= [[1.0] [2.0] [3.0]] (tt/reshape [1.0 2.0 3.0] [3 1]))))
+  (testing "single element / length-1 dims (fold base case -- catches over-wrap)"
+    (is (= [1.0] (tt/reshape [1.0] [1])))
+    (is (= [[1.0]] (tt/reshape [1.0] [1 1])))
+    (is (= [[[1.0]]] (tt/reshape [1.0] [1 1 1]))))
+  (testing "3-D nests row-major"
+    (is (= [[[1.0 2.0] [3.0 4.0]] [[5.0 6.0] [7.0 8.0]]]
+           (tt/reshape [1.0 2.0 3.0 4.0 5.0 6.0 7.0 8.0] [2 2 2])))))
+
+;; core.matrix compatibility: these encode the parts of the contract beyond a
+;; same-size round-trip. Enable once reshape (a) flattens its input first and
+;; (b) truncates / zero-pads on element-count mismatch. If you scope reshape to
+;; flat, equal-count input for now, leave this commented and note the gap.
+(deftest reshape-core-matrix-contract
+  (testing "row-major regardless of input shape (flattens nested m first)"
+    (is (= [1.0 2.0 3.0 4.0] (tt/reshape [[1.0 2.0] [3.0 4.0]] [4])))
+    (is (= [[1.0 2.0 3.0 4.0]] (tt/reshape [[1.0 2.0] [3.0 4.0]] [1 4]))))
+  (testing "truncates when the new shape is smaller"
+    (is (= [[1.0 2.0] [3.0 4.0]]
+           (tt/reshape [1.0 2.0 3.0 4.0 5.0 6.0] [2 2]))))
+  (testing "zero-pads when the new shape is larger"
+    (is (= [[1.0 2.0 3.0] [4.0 0.0 0.0]]
+           (tt/reshape [1.0 2.0 3.0 4.0] [2 3])))))
+
 ;; --- Milestone 2: matmul forward (vs the proven blas/matmul-reference) ---
 (deftest matmul-forward
   (testing "matmul matches blas/matmul-reference (2x3 . 3x2)"
