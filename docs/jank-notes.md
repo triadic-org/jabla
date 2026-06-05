@@ -53,6 +53,12 @@ https://github.com/jank-lang/jank/blob/main/compiler+runtime/doc/build.md
   that internally calls core `reset!` resolves to your own fn (arity mismatch →
   `JIT session error: Symbols not found`). Name helpers distinctly (we use
   `clear!`).
+- **Parts of the lazy stdlib are unimplemented or fragile (verified 2026-06-05).**
+  `rseq` is a stub that throws `"TODO: port rseq"`. Lazy `partition` blew up with a
+  native `invalid sequence: …` when its result was realized. These surfaced while
+  writing `tensor/reshape`. Workaround: avoid the lazy seq ops on the hot path —
+  build with eager vector ops (`subvec` / `nth` + index math + `mapv` / `range`),
+  which are solid. (`flatten` itself worked once forced with `vec`.)
 
 ## C++ interop
 - All native symbols live under the reserved `cpp/` namespace.
@@ -112,6 +118,13 @@ jank CLI flags go **before** the subcommand: `jank -I <dir> -L <dir> -lfoo run .
     var name / line (metadata gap), so put the human label in a `(testing "...")`
     block (it prints on failure). Float tolerance: a local `approx?` helper in
     `test/jabla/test_util.jank` (clojure.test has none).
+  - **Native jank exceptions escape `clojure.test` (verified 2026-06-05).** A
+    C++-level throw (`invalid sequence`, `index out of bounds`, raw `cpp/` faults)
+    aborts the *whole* run as `Uncaught exception: …` — it isn't caught into a
+    per-test `ERROR in`, so one bad op nukes every other test and you get no
+    "Ran N tests" summary. A Clojure `ex-info` (e.g. our `not implemented` stubs)
+    *does* get caught and reported per-test. So an uncaught crash = a native op
+    blew up; bisect by commenting suspect assertions, not by reading the summary.
 
 ## Known gaps
 - No jank-specific **linter/formatter**. We lint with **clj-kondo** (native binary,

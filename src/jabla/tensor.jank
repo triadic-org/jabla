@@ -12,19 +12,16 @@
 ;; ============================================================================
 
 ;; --- Representation (decided) -----------------------------------------------
-;; A tensor is a jank map: {:shape [d0 d1 ...] :dtype :f32 :store <storage>}.
-;;   - :dtype is :f32 in the buffer (matches sgemm and the GPU end-state); the
-;;     jank API speaks doubles and narrows at the boundary. Carry :dtype so
-;;     fp16/bf16 become a storage change later, not a rewrite.
-;;   - :store is the bulk data. TARGET = a native float32 buffer that C++ owns and
-;;     jank references by handle (data lives in C++, exactly like blas/sgemm's
-;;     buffers; a cpp/include/jabla_tensor.hpp buffer layer, analogous to
-;;     jabla_blas.hpp).
-;;
-;; BRING-UP SHORTCUT (recommended first cut): make :store a flat jank vector of
-;; doubles. That gets the API + the autograd tape shape correct with zero pointer
-;; interop, lets you validate against PyTorch, THEN swap :store for native buffers
-;; for speed. One unknown at a time -- the same method as the sgemm spikes.
+;; A tensor is a jank map: {:shape [d0 d1 ...] :dtype :f32 :id <handle>}.
+;;   - :shape -- dimension sizes (row-major), a plain jank vector.
+;;   - :dtype -- :f32 in the buffer (matches sgemm and the GPU end-state); the
+;;     jank API speaks doubles and narrows at the boundary. Carrying :dtype keeps
+;;     fp16/bf16 a storage change later, not a rewrite.
+;;   - :id    -- index into a native float32 buffer C++ owns (tensor.hpp's
+;;     registry), the same ownership model as blas/sgemm. Bulk data never lives in
+;;     jank: it holds only the handle and marshals at the edges (->tensor /
+;;     ->vectors). We went native from the start rather than via a flat-doubles
+;;     shortcut, since blas/sgemm already proved the interop path.
 
 ;; --- Autograd (the core design task) ----------------------------------------
 ;; Reuse jabla.autograd's tape, generalized: a node carries a *tensor* payload and
@@ -36,22 +33,28 @@
 ;;   through blas/sgemm. Derive the rest the same way you did the scalar ops.
 ;; See docs/autograd-references.md (the flat-tape / vjp design).
 
-;; --- Public surface (names + contracts; the impls are yours) -----------------
+;; --- Public surface ---------------------------------------------------------
+;; Construction + readback are done; the ops (matmul/add/backward) are next.
 ;; NOTE: matmul's forward will (:require [jabla.blas :as blas]) -- add it then.
-;
+
 (defn- shape-of
-  "Iterate through first element of each nested depth of vector to infer shape"
+  "Infer a row-major shape from nested vectors: count siblings at each depth,
+  following the first element down until the leaves stop being vectors. Assumes
+  rectangular nesting."
   [v]
   (->> v (iterate first) (take-while vector?) (mapv count)))
 
 (defn ->tensor
-  "Construct a tensor from nested jank vectors (row-major); infer :shape."
+  "Construct a tensor from nested jank vectors (row-major). Infers :shape, then
+  flattens row-major and hands the elements to the C++ registry, which returns
+  the buffer handle we store as :id. (vec forces the flatten -- jank marshals a
+  persistent vector to std::vector, but not a lazy seq.)"
   [v]
   (let [shape (shape-of v)
-        t-id (cpp/createTensor (-> v flatten vec))]
+        t-id  (cpp/createTensor (-> v flatten vec))]
     {:shape shape
      :dtype :f32
-     :id t-id}))
+     :id    t-id}))
 
 (defn get-shape
   "Vector of dimension sizes."
@@ -64,26 +67,33 @@
   (:dtype t))
 
 (defn reshape
-  "Reshape a row-major element sequence into nested vectors of `shape`.
-    Flattens m first, so input shape doesn't matter (core.matrix semantics)."
+  "Nest a row-major element sequence into vectors of `shape`.
+
+  Tracks clojure.core.matrix/reshape: flattens `m` first (its current shape is
+  irrelevant), then refills row-major -- truncating if there are too many
+  elements, zero-padding if too few.
+
+  Built outside-in: `build` peels the outermost dim off `dims`, emits one child
+  per index, and recurses on the rest; the base case (no dims left) is a single
+  element. `stride` is the row-major stride of the current axis -- how many flat
+  elements one step along it spans. Eager vector ops only: jank's lazy
+  partition/rseq are unreliable (docs/jank-notes.md)."
   [m shape]
   (let [flat (vec (flatten m))
         n    (count flat)]
     (letfn [(build [offset dims]
-              (if (= 1 (count dims))
-                ;; leaf: read shape's worth of elements, zero-padding past the end
-                ;; (so we both truncate long input and pad short input -- core.matrix)
-                (mapv (fn [i]
-                        (let [j (+ offset i)]
-                          (if (< j n) (nth flat j) 0.0)))
-                      (range (first dims)))
-                (let [inner (reduce * 1 (rest dims))]
-                  (mapv (fn [i] (build (+ offset (* i inner)) (rest dims)))
+              (if (empty? dims)
+                ;; one element; zero-pad once we run off the end of `flat`
+                (if (< offset n) (nth flat offset) 0.0)
+                (let [stride (reduce * 1 (rest dims))]
+                  (mapv (fn [i] (build (+ offset (* i stride)) (rest dims)))
                         (range (first dims))))))]
       (build 0 shape))))
 
 (defn ->vectors
-  "Read a tensor back into nested jank vectors (for tests / debugging)."
+  "Read a tensor back into nested jank vectors (for tests / debugging): pull the
+  flat buffer from C++ by :id, then reshape it to the tensor's shape. This is
+  core.matrix's to-nested-vectors -- the inverse of ->tensor."
   [t]
   (let [raw-v (-> t :id cpp/getTensor)]
     (reshape raw-v (get-shape t))))
@@ -118,11 +128,11 @@
   [_t]
   (throw (ex-info "not implemented" {})))
 
-;; --- First milestone (suggested order) --------------------------------------
-;; 1. :store as flat doubles; implement tensor / shape / dtype / ->vectors.
+;; --- Milestones (suggested order) -------------------------------------------
+;; 1. [done] ->tensor / get-shape / get-dtype / reshape / ->vectors on the
+;;    native C++ registry (tensor.hpp).
 ;; 2. matmul forward via blas/sgemm; check vs blas/matmul-reference.
 ;; 3. add forward + tape recording for both ops.
 ;; 4. backward! for matmul + add; gradient-check via finite differences (reuse
 ;;    the grad-check idea from test/jabla/autograd_test.jank) before trusting it.
 ;; 5. then the rest of the op set, building toward one attention block vs PyTorch.
-;; 6. swap :store from flat doubles to native float32 buffers for speed.
