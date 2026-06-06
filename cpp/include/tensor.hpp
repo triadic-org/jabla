@@ -31,11 +31,3 @@ inline int matmul(int aId, int bId, int m, int n, int k) {
   return (int)tensors.size() - 1;
 }
 
-// (defn matmul
-//   "a (m x k) . b (k x n) -> (m x n). Forward routes through blas/sgemm; records a
-//   node whose vjp is two matmuls of the upstream gradient with a and b."
-//   [t1 t2]
-//   (let [[m k] (get-shape t1)
-//         [_ n] (get-shape t2)
-//         t3-id (cpp/matmul (:id t1) (:id t2) m n k)]
-//     {:shape [m n] :dtype DEFAULT_DTYPE :id t3-id}))
