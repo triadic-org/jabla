@@ -1,5 +1,5 @@
 (ns jabla.tensor
-  (:include "tensor.hpp"))
+  (:include "jabla.hpp"))
 
 (def DEFAULT_DTYPE :f32)
 
@@ -19,7 +19,7 @@
 ;;   - :dtype -- :f32 in the buffer (matches sgemm and the GPU end-state); the
 ;;     jank API speaks doubles and narrows at the boundary. Carrying :dtype keeps
 ;;     fp16/bf16 a storage change later, not a rewrite.
-;;   - :id    -- index into a native float32 buffer C++ owns (tensor.hpp's
+;;   - :id    -- index into a native float32 buffer C++ owns (jabla.hpp's
 ;;     registry), the same ownership model as blas/sgemm. Bulk data never lives in
 ;;     jank: it holds only the handle and marshals at the edges (->tensor /
 ;;     ->vectors). We went native from the start rather than via a flat-doubles
@@ -32,7 +32,7 @@
 ;; but each step pushes a tensor gradient into its inputs and accumulates.
 ;;   Key insight: matmul's vjp is itself two matmuls of the upstream gradient with
 ;;   the inputs (work out which sides/transposes) -- so backward *also* routes
-;;   through blas/sgemm. Derive the rest the same way you did the scalar ops.
+;;   through the matmul kernel (cpp/jabla.matmul). Derive the rest like the scalars.
 ;; See docs/autograd-references.md (the flat-tape / vjp design).
 
 ;; --- Public surface ---------------------------------------------------------
@@ -53,7 +53,7 @@
   persistent vector to std::vector, but not a lazy seq.)"
   [v]
   (let [shape (shape-of v)
-        t-id  (cpp/createTensor (-> v flatten vec))]
+        t-id  (cpp/jabla.createTensor (-> v flatten vec))]
     {:shape shape
      :dtype DEFAULT_DTYPE
      :id    t-id}))
@@ -97,18 +97,37 @@
   flat buffer from C++ by :id, then reshape it to the tensor's shape. This is
   core.matrix's to-nested-vectors -- the inverse of ->tensor."
   [t]
-  (let [raw-v (-> t :id cpp/getTensor)]
+  (let [raw-v (-> t :id cpp/jabla.getTensor)]
     (reshape raw-v (get-shape t))))
 
-;; --- Ops: start with matmul + add; the rest follow the same forward+vjp shape --
+;; --- Op model: every op is forward + vjp, recorded on the tape --------------
+;; An op here is the tensor analogue of a scalar autograd op (jabla.autograd): a
+;; forward computation PLUS a recorded backward (vjp -- vector-Jacobian product)
+;; so backward! can replay it in reverse. Forward + vjp + tape node, always both;
+;; ops differ only in what the forward computes:
+;;   matmul         (m x k).(k x n) matrix product -- contraction, BLAS kernel
+;;   add            a + b elementwise              -- vjp passes grad through
+;;   mul            a * b ELEMENTWISE (Hadamard)   -- NOT matmul; dA=dY*b, dB=dY*a
+;;   relu/gelu      activation, elementwise        -- vjp: * activation derivative
+;;   softmax        row-wise exp/sum               -- reduction
+;;   layernorm      per-row normalize + affine     -- reduction
+;;   embedding      gather rows by index           -- vjp: scatter-add to used rows
+;;   cross-entropy  scalar loss                    -- vjp: (softmax - onehot)/N
+;; matmul (matrix product) != mul (elementwise) -- both exist, distinct ops. The
+;; forward is a BLAS call only for the contraction ops; add/relu are plain
+;; elementwise loops. The common thread is the tape, not BLAS.
+;;
+;; Forwards land first (milestones 2-3); the tape node + vjp arrive with backward!
+;; (milestone 4). matmul below is forward-only for now.
 
 (defn matmul
-  "a (m x k) . b (k x n) -> (m x n). Forward routes through blas/sgemm; records a
-  node whose vjp is two matmuls of the upstream gradient with a and b."
+  "a (m x k) . b (k x n) -> (m x n). Forward via the native cblas_sgemm kernel
+  (cpp/jabla.matmul). vjp -- two matmuls of the upstream gradient with a and b --
+  is recorded once the tape lands (milestone 4); forward-only for now."
   [t1 t2]
   (let [[m k] (get-shape t1)
         [_ n] (get-shape t2)
-        t3-id (cpp/matmul (:id t1) (:id t2) m n k)]
+        t3-id (cpp/jabla.matmul (:id t1) (:id t2) m n k)]
     {:shape [m n] :dtype DEFAULT_DTYPE :id t3-id}))
 
 (defn add
@@ -135,7 +154,7 @@
 
 ;; --- Milestones (suggested order) -------------------------------------------
 ;; 1. [done] ->tensor / get-shape / get-dtype / reshape / ->vectors on the
-;;    native C++ registry (tensor.hpp).
+;;    native C++ registry (jabla.hpp).
 ;; 2. matmul forward via blas/sgemm; check vs blas/matmul-reference.
 ;; 3. add forward + tape recording for both ops.
 ;; 4. backward! for matmul + add; gradient-check via finite differences (reuse

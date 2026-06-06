@@ -53,6 +53,24 @@ https://github.com/jank-lang/jank/blob/main/compiler+runtime/doc/build.md
   that internally calls core `reset!` resolves to your own fn (arity mismatch →
   `JIT session error: Symbols not found`). Name helpers distinctly (we use
   `clear!`).
+- **Don't let a `cpp/` symbol collide with a jank var's munged name (verified
+  2026-06-05).** A `(defn matmul …)` that calls `(cpp/matmul …)` fails to compile:
+  `type 'const jank::runtime::object_ref' ... does not provide a call operator`.
+  jank emits the interop call *unqualified* (`matmul(...)`), and the jank var of
+  the same name shadows the C++ function in the generated TU.
+  - *Invariant:* the C++ name as written in `cpp/…` must not be byte-identical to
+    any in-scope jank var's munged name. jank munges Clojure-style (`-` -> `_`,
+    case preserved), so a "C++ camelCase / jank kebab" convention avoids the clash
+    for *compound* names (`matMul` vs munged `mat_mul`). It does NOT save *single*
+    words -- `add` == `add`, no hump to differentiate.
+  - *Cleanest fix (covers single words too):* put the C++ symbols in a namespace
+    and call them qualified -- `namespace jabla { int matmul(...); }` +
+    `(cpp/jabla.matmul …)` -> `jabla::matmul(...)`. A qualified call can't be
+    shadowed by the unqualified jank var, so both sides keep the natural name. We
+    do this in `cpp/include/jabla.hpp`. (Per-symbol distinct names -- `mm`,
+    `addTensors` -- also work; the namespace is just uniform.) Note: this relies
+    on `cpp/<ns>.<fn>` emitting a qualified call (as `cpp/std.sqrt` does) --
+    confirm on the devbox, since it gates the whole interop path now.
 - **Parts of the lazy stdlib are unimplemented or fragile (verified 2026-06-05).**
   `rseq` is a stub that throws `"TODO: port rseq"`. Lazy `partition` blew up with a
   native `invalid sequence: …` when its result was realized. These surfaced while

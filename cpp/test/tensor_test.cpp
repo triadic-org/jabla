@@ -1,12 +1,14 @@
-// C++ unit tests for the tensor backend (cpp/include/tensor.hpp): the buffer
+// C++ unit tests for the tensor backend (cpp/include/jabla.hpp): the buffer
 // registry plus the ops (matmul, ...). Uses doctest (vendored single header).
 // Run locally, no jank: `make cpp-test`. Catches C++ logic bugs (the class that
 // cost a devbox round-trip in the BLAS spike) in the fast clang loop.
 //
-// The matmul cases are RED until you implement matmul in tensor.hpp.
+// The backend lives in namespace jabla; `using` it here keeps the calls terse.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest.h"
-#include "tensor.hpp"
+#include "jabla.hpp"
+
+using namespace jabla;
 
 TEST_CASE("createTensor stores data, getTensor returns it unchanged") {
   clearTensors();
