@@ -1,6 +1,8 @@
 (ns jabla.tensor
   (:include "tensor.hpp"))
 
+(def DEFAULT_DTYPE :f32)
+
 ;; ============================================================================
 ;; Tensors with autograd, on native BLAS. Roadmap step 3: lift jabla.autograd
 ;; from scalars to arrays. Validators: one attention block matches PyTorch
@@ -53,7 +55,7 @@
   (let [shape (shape-of v)
         t-id  (cpp/createTensor (-> v flatten vec))]
     {:shape shape
-     :dtype :f32
+     :dtype DEFAULT_DTYPE
      :id    t-id}))
 
 (defn get-shape
@@ -103,8 +105,11 @@
 (defn matmul
   "a (m x k) . b (k x n) -> (m x n). Forward routes through blas/sgemm; records a
   node whose vjp is two matmuls of the upstream gradient with a and b."
-  [_a _b]
-  (throw (ex-info "not implemented -- forward via blas/sgemm" {})))
+  [t1 t2]
+  (let [[m k] (get-shape t1)
+        [_ n] (get-shape t2)
+        t3-id (cpp/matmul (:id t1) (:id t2) m n k)]
+    {:shape [m n] :dtype DEFAULT_DTYPE :id t3-id}))
 
 (defn add
   "Elementwise add (with broadcasting). vjp passes the gradient through (mind the
