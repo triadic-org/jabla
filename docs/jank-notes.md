@@ -68,9 +68,9 @@ https://github.com/jank-lang/jank/blob/main/compiler+runtime/doc/build.md
     `(cpp/jabla.matmul …)` -> `jabla::matmul(...)`. A qualified call can't be
     shadowed by the unqualified jank var, so both sides keep the natural name. We
     do this in `cpp/include/jabla.hpp`. (Per-symbol distinct names -- `mm`,
-    `addTensors` -- also work; the namespace is just uniform.) Note: this relies
-    on `cpp/<ns>.<fn>` emitting a qualified call (as `cpp/std.sqrt` does) --
-    confirm on the devbox, since it gates the whole interop path now.
+    `addTensors` -- also work; the namespace is just uniform.) This works because
+    `cpp/<ns>.<fn>` emits a qualified call (like `cpp/std.sqrt`); verified
+    2026-06-05 on the devbox -- the whole tensor interop path now runs through it.
 - **Parts of the lazy stdlib are unimplemented or fragile (verified 2026-06-05).**
   `rseq` is a stub that throws `"TODO: port rseq"`. Lazy `partition` blew up with a
   native `invalid sequence: …` when its result was realized. These surfaced while

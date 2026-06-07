@@ -6,19 +6,23 @@ the implementation is at fault.
 | # | Step | Lives in | Validator | Status |
 |---|------|----------|-----------|--------|
 | 1 | Scalar reverse-mode autograd | `src/jabla/autograd.jank` | grads match `reference/micrograd/test/test_engine.py` (vs PyTorch) | **Done** |
-| 2 | Single BLAS/cuBLAS `sgemm` via `cpp/` | `cpp/` + `src/jabla/blas.jank` | matmul matches a reference; first host-vs-device timing split | **Done (CPU)** [1] |
-| 3 | Lift autograd to tensors on native BLAS | `src/jabla/tensor.jank` | one attention block matches PyTorch element-wise | **Scaffolded** [2] |
+| 2 | Single BLAS/cuBLAS `sgemm` via `cpp/` | `cpp/include/jabla.hpp` | matmul matches a reference; first host-vs-device timing split | **Done (CPU)** [1] |
+| 3 | Lift autograd to tensors on native BLAS | `src/jabla/tensor.jank` | one attention block matches PyTorch element-wise | **In progress** [2] |
 | 4 | Full GPT; train TinyShakespeare → TinyStories | new ns (e.g. `jabla.gpt`) | loss-per-step curve in `experiments/` tracks nanoGPT's | Todo |
 | 5 | Instrument MFU / tokens-sec | timing utils | wall-clock vs CUDA-event; MFU vs a PyTorch yardstick | Todo |
 | 6 | Additional methods (e.g. SAEs) | new ns | reproduce the reference metric | Todo |
 
-_Status as of 2026-06-04._
-- **[1]** CPU `cblas_sgemm` (OpenBLAS) matches `blas/matmul-reference` via `make test`;
-  the host-vs-device timing split is deferred to the cuBLAS/GPU port. Step 1 is
-  validated by `test/jabla/autograd_test.jank` (per-op unit grads + finite-difference
-  grad-check + a micrograd `test_sanity_check` oracle).
-- **[2]** `tensor.jank` has the representation, autograd-via-tape plan, API stubs,
-  and a milestone order; the op forwards and tensor `backward!` are unimplemented.
+_Status as of 2026-06-05._
+- **[1]** CPU `cblas_sgemm` (OpenBLAS) matches `matmul-reference` (in `test-util`)
+  via `make test`. The bring-up spike (`blas.jank`) is retired now that the kernel
+  lives natively in `cpp/include/jabla.hpp` (`jabla::matmul`), called from
+  `jabla.tensor`; the host-vs-device timing split is deferred to the cuBLAS/GPU
+  port. Step 1 is validated by `test/jabla/autograd_test.jank` (per-op unit grads +
+  finite-difference grad-check + a micrograd `test_sanity_check` oracle).
+- **[2]** `tensor.jank`: representation + readback (`->tensor` / `reshape` /
+  `->vectors`) and `matmul` forward (native `cblas_sgemm`) are done and tested
+  (square + rectangular vs `matmul-reference`); `add` is scaffolded. The tape +
+  tensor `backward!` are the remaining work.
 
 `src/jabla/trace.jank` (eligibility traces) is an independent track, not part of
 the GPT order above.

@@ -38,7 +38,7 @@ TEST_CASE("clear empties the registry; ids restart") {
 // a (m x k) and b (k x n) via cblas_sgemm, stores the m x n result as a NEW
 // registry tensor, and returns its id (the result stays native -- no marshalling
 // out). Param order is cblas's M, N, K. Oracle is the hand-computed 2x3 . 3x2
-// also used by the jank/blas tests.
+// also used by the jank matmul test.
 
 TEST_CASE("matmul: (2x3)(3x2) = (2x2)") {
   clearTensors();
@@ -64,4 +64,32 @@ TEST_CASE("matmul leaves its inputs untouched (no aliasing)") {
   matmul(a, b, 2, 2, 3);
   CHECK(getTensor(a) == std::vector<float>{1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f});
   CHECK(getTensor(b) == std::vector<float>{7.0f, 8.0f, 9.0f, 10.0f, 11.0f, 12.0f});
+}
+
+// --- add (elementwise; no BLAS) ---------------------------------------------
+// Contract under test: add(aIdx, bIdx) sums the two registry buffers elementwise
+// (same length), stores the result as a NEW registry tensor, returns its id.
+// RED until you implement add in jabla.hpp.
+
+TEST_CASE("add: elementwise (2x2)+(2x2)") {
+  clearTensors();
+  int a = createTensor({1.0f, 2.0f, 3.0f, 4.0f});
+  int b = createTensor({10.0f, 20.0f, 30.0f, 40.0f});
+  int c = add(a, b);
+  auto v = getTensor(c);
+
+  REQUIRE(v.size() == 4);
+  CHECK(v[0] == doctest::Approx(11.0f));
+  CHECK(v[1] == doctest::Approx(22.0f));
+  CHECK(v[2] == doctest::Approx(33.0f));
+  CHECK(v[3] == doctest::Approx(44.0f));
+}
+
+TEST_CASE("add leaves its inputs untouched (no aliasing)") {
+  clearTensors();
+  int a = createTensor({1.0f, 2.0f, 3.0f, 4.0f});
+  int b = createTensor({10.0f, 20.0f, 30.0f, 40.0f});
+  add(a, b);
+  CHECK(getTensor(a) == std::vector<float>{1.0f, 2.0f, 3.0f, 4.0f});
+  CHECK(getTensor(b) == std::vector<float>{10.0f, 20.0f, 30.0f, 40.0f});
 }

@@ -9,7 +9,7 @@
 ;; element-wise; end-to-end, nanoGPT's loss-per-step curve on TinyShakespeare
 ;; (log to experiments/). References: reference/llm.c, reference/nanoGPT.
 ;;
-;; Step 2 (blas/sgemm) has landed, so matmul has a native kernel to call.
+;; Step 2 landed the native matmul kernel (cblas_sgemm in jabla.hpp).
 ;; SCAFFOLD ONLY -- the op forwards and the tensor-level backward are the work.
 ;; ============================================================================
 
@@ -20,10 +20,10 @@
 ;;     jank API speaks doubles and narrows at the boundary. Carrying :dtype keeps
 ;;     fp16/bf16 a storage change later, not a rewrite.
 ;;   - :id    -- index into a native float32 buffer C++ owns (jabla.hpp's
-;;     registry), the same ownership model as blas/sgemm. Bulk data never lives in
-;;     jank: it holds only the handle and marshals at the edges (->tensor /
-;;     ->vectors). We went native from the start rather than via a flat-doubles
-;;     shortcut, since blas/sgemm already proved the interop path.
+;;     registry); the matmul kernel reads/writes these by id. Bulk data never
+;;     lives in jank: it holds only the handle and marshals at the edges
+;;     (->tensor / ->vectors). We went native from the start rather than via a
+;;     flat-doubles shortcut, since the BLAS interop path was already proven.
 
 ;; --- Autograd (the core design task) ----------------------------------------
 ;; Reuse jabla.autograd's tape, generalized: a node carries a *tensor* payload and
@@ -36,8 +36,7 @@
 ;; See docs/autograd-references.md (the flat-tape / vjp design).
 
 ;; --- Public surface ---------------------------------------------------------
-;; Construction + readback are done; the ops (matmul/add/backward) are next.
-;; NOTE: matmul's forward will (:require [jabla.blas :as blas]) -- add it then.
+;; Construction + readback + matmul are done; add forward + the tape are next.
 
 (defn- shape-of
   "Infer a row-major shape from nested vectors: count siblings at each depth,
@@ -131,8 +130,11 @@
     {:shape [m n] :dtype DEFAULT_DTYPE :id t3-id}))
 
 (defn add
-  "Elementwise add (with broadcasting). vjp passes the gradient through (mind the
-  broadcast axes: sum the gradient back down to each input's shape)."
+  "Elementwise a + b (same shape for now; broadcasting later). Forward via
+  cpp/jabla.add on the registry buffers -> a new tensor of a's shape (mirror
+  matmul: pull :ids, call the kernel, wrap {:shape :dtype :id}). vjp passes the
+  gradient straight through to both inputs (with broadcasting, later, sum it back
+  down to each input's shape). TODO(you): forward now; tape node at milestone 4."
   [_a _b]
   (throw (ex-info "not implemented" {})))
 
@@ -155,7 +157,8 @@
 ;; --- Milestones (suggested order) -------------------------------------------
 ;; 1. [done] ->tensor / get-shape / get-dtype / reshape / ->vectors on the
 ;;    native C++ registry (jabla.hpp).
-;; 2. matmul forward via blas/sgemm; check vs blas/matmul-reference.
+;; 2. [done] matmul forward via native cblas (jabla.hpp); checked vs
+;;    matmul-reference (test-util) -- square + rectangular.
 ;; 3. add forward + tape recording for both ops.
 ;; 4. backward! for matmul + add; gradient-check via finite differences (reuse
 ;;    the grad-check idea from test/jabla/autograd_test.jank) before trusting it.

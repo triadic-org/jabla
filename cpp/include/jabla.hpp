@@ -3,7 +3,7 @@
 #include <cblas.h>
 
 // Native backend for jabla.tensor: the buffer registry plus the ops (matmul,
-// ...). One header for now; split (jabla_blas, jabla_nn, ...) once the
+// ...). One header for now; split (jabla_nn, jabla_cuda, ...) once the
 // organization is clearer.
 //
 // Everything lives in `namespace jabla` so the C++ symbols can keep their
@@ -46,6 +46,15 @@ inline int matmul(int aId, int bId, int m, int n, int k) {
 
   tensors.push_back(std::move(c));
   return (int)tensors.size() - 1;
+}
+
+// add kernel (scaffold -- body is yours): elementwise a + b, same shape. Reads
+// the two registry buffers (they should be equal length -- consider asserting
+// it), writes the sum as a NEW registry tensor, returns its id. Elementwise, so
+// no BLAS -- just a loop. Broadcasting comes later. Mirror matmul's tail:
+// push_back(std::move(result)); return (int)tensors.size() - 1;
+inline int add(int aId, int bId) {
+  return -1; // TODO(you): sum tensors.at(aId) + tensors.at(bId) into a new tensor
 }
 
 } // namespace jabla

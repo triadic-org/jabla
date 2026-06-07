@@ -1,8 +1,8 @@
 (ns jabla.test-util
   (:require [jabla.autograd :as ag]))
 
-;; Domain test helpers for the autograd engine. (clojure.test is the framework;
-;; this is just jabla-specific assertions, used inside clojure.test's `is`.)
+;; Domain test helpers (clojure.test is the framework; this is jabla-specific
+;; assertions + oracles, used inside clojure.test's `is`).
 
 (defn approx?
   "True when |expected - actual| <= tol. clojure.test has no float-tolerance
@@ -33,3 +33,19 @@
     (every? (fn [[analytic numerical]]
               (<= (abs (- analytic numerical)) (+ 1e-6 (* 1e-4 (abs analytic)))))
             (map vector analytic-grads numerical-grads))))
+
+(defn matmul-reference
+  "Naive row-by-column matrix multiply, pure jank -- the ground-truth oracle to
+  diff the native jabla.tensor/matmul against. a is m x k, b is k x n -> m x n.
+  (Was the target of the retired blas/sgemm spike; now lives here as a test
+  oracle since the spike's job is done.)"
+  [a b]
+  (let [m (count a)
+        k (count (first a))
+        n (count (first b))]
+    (vec (for [i (range m)]
+           (vec (for [j (range n)]
+                  (reduce + 0.0
+                          (for [p (range k)]
+                            (* (nth (nth a i) p)
+                               (nth (nth b p) j))))))))))

@@ -1,7 +1,6 @@
 (ns jabla.tensor-test
   (:require [clojure.test :refer [deftest is testing]]
             [jabla.tensor :as tt]
-            [jabla.blas :as blas]
             [jabla.test-util :as tu]))
 
 ;; Uncomment-as-you-go guide for jabla.tensor (roadmap step 3). Each deftest
@@ -68,9 +67,9 @@
     (is (= [[1.0 2.0 3.0] [4.0 0.0 0.0]]
            (tt/reshape [1.0 2.0 3.0 4.0] [2 3])))))
 
-;; --- Milestone 2: matmul forward (vs the proven blas/matmul-reference) ---
+;; --- Milestone 2: matmul forward (vs the proven matmul-reference) ---
 (deftest matmul-forward
-  (testing "matmul matches blas/matmul-reference (2x3 . 3x2)"
+  (testing "matmul matches matmul-reference (2x3 . 3x2)"
     (let [a (tt/->tensor [[1.0 2.0 3.0] [4.0 5.0 6.0]])
           b (tt/->tensor [[7.0 8.0] [9.0 10.0] [11.0 12.0]])
           c (tt/->vectors (tt/matmul a b))]
@@ -82,13 +81,13 @@
 ;; A rectangular case. The square 2x2 result above can hide a transposed result
 ;; shape ([m n] vs [n m] are both [2 2]) and leading-dimension mix-ups (often
 ;; symmetric on square data). 2x3 . 3x4 -> 2x4 exercises both, and we diff the
-;; native result against the independent pure-jank blas/matmul-reference (the
-;; "vs blas/matmul-reference" the milestone calls for) rather than hand-computing.
+;; native result against the independent pure-jank matmul-reference (the
+;; "vs matmul-reference" the milestone calls for) rather than hand-computing.
 (deftest matmul-forward-rectangular
-  (testing "matmul (2x3)(3x4)=(2x4): shape + values vs blas/matmul-reference"
+  (testing "matmul (2x3)(3x4)=(2x4): shape + values vs matmul-reference"
     (let [av  [[1.0 2.0 3.0] [4.0 5.0 6.0]]
           bv  [[1.0 2.0 3.0 4.0] [5.0 6.0 7.0 8.0] [9.0 10.0 11.0 12.0]]
-          exp (blas/matmul-reference av bv)
+          exp (tu/matmul-reference av bv)
           y   (tt/matmul (tt/->tensor av) (tt/->tensor bv))
           c   (tt/->vectors y)]
       (is (= [2 4] (tt/get-shape y)))                       ; m,n order -- not n,m

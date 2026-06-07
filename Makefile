@@ -37,7 +37,7 @@ help:
 	@echo "jabla targets:"
 	@echo "  make repl         Start a jank REPL on the module path (then connect Conjure/CIDER via nREPL)"
 	@echo "  make run          Run $(MAIN_NS) -main"
-	@echo "  make test         Run all test suites (clojure.test). One suite: make test SUITE=autograd|blas"
+	@echo "  make test         Run all test suites (clojure.test). One suite: make test SUITE=autograd|tensor"
 	@echo "  make compile      AOT-compile $(MAIN_NS)  [verify exact subcommand against your jank version]"
 	@echo "  make module-path  Print the Clojure-CLI-computed module path (needs clojure + JDK)"
 	@echo "  make doctor       Report which tools are installed"
@@ -62,8 +62,8 @@ check-clojure:
 	  echo ">> '$(CLOJURE)' not found (needs a JDK). Only required to recompute module-path."; exit 1; }
 
 # Preflight: fail with a clear message if OpenBLAS isn't installed, instead of
-# jank's opaque "Failed to load dynamic library" when jabla.blas loads. Gated on
-# run/test/compile (which load blas-dependent code); repl is left ungated so you
+# jank's opaque "Failed to load dynamic library" when jabla.tensor loads. Gated on
+# run/test/compile (which load BLAS-dependent code); repl is left ungated so you
 # can poke non-blas code without OpenBLAS present.
 check-blas:
 	@if [ -e "$(CBLAS_LIBDIR)/libopenblas.so" ] \
@@ -71,7 +71,7 @@ check-blas:
 	   || { [ "$$(uname -s)" = Darwin ] && [ -e "$$(brew --prefix openblas 2>/dev/null)/lib/libopenblas.dylib" ]; }; then \
 	  :; \
 	else \
-	  echo ">> OpenBLAS not found (needed by jabla.blas). Run 'make deps' to install it."; exit 1; \
+	  echo ">> OpenBLAS not found (needed by jabla.tensor). Run 'make deps' to install it."; exit 1; \
 	fi
 
 repl: check-jank
