@@ -11,7 +11,14 @@ cflags="${CPP_CHECK_FLAGS:--std=c++20 -Wall -Wextra -Icpp/include}"
 libdir="${CBLAS_LIBDIR:-/lib/x86_64-linux-gnu}"
 eval "$(bin/cpp-toolchain "$cxx" "$cflags" "$libdir")"
 
-command -v "$CPP_CXX" >/dev/null 2>&1 || { echo ">> '$CPP_CXX' not found"; exit 1; }
+if ! command -v "$CPP_CXX" >/dev/null 2>&1; then
+  if [ -n "${CPP_STRICT:-}" ]; then
+    echo ">> '$CPP_CXX' not found and CPP_STRICT set -- failing (install via 'make deps')."
+    exit 1
+  fi
+  echo ">> '$CPP_CXX' not found -- SKIPPING cpp-test (install via 'make deps')."
+  exit 0
+fi
 
 tmpbin="$(mktemp)"
 trap 'rm -f "$tmpbin"' EXIT

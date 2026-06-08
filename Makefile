@@ -14,11 +14,14 @@ TEST_RUNNER ?= jabla.test-runner
 # and pass the result: `make repl MODULE_PATH="$(make -s module-path)"`.
 MODULE_PATH ?= src:test
 
-# Native (C++) dependencies for the cpp/ interop layer (BLAS now; add CUDA/cuBLAS
-# here as the layer grows). Build/run is on the Linux devbox; macOS is kept
-# working for completeness even though it doesn't run jank.
-APT_DEPS  ?= libopenblas-dev
-BREW_DEPS ?= openblas
+# Native (C++) dependencies for the cpp/ interop layer: the OpenBLAS runtime lib
+# plus a standalone clang for the local pre-flight checks. jank bundles its own
+# LLVM for the JIT, so clang here is only for bin/cpp-check / bin/cpp-test (and the
+# pre-commit hook), not for running jabla. Add CUDA/cuBLAS here as the layer grows.
+# Build/run is on the Linux devbox; macOS is kept working even though it doesn't
+# run jank.
+APT_DEPS  ?= libopenblas-dev clang
+BREW_DEPS ?= openblas llvm
 
 # C++ interop flags for the jank CLI on run/test/repl/compile: the cpp/include
 # header dir + the OpenBLAS link. jank does NOT search the default linker paths,
@@ -48,7 +51,7 @@ help:
 	@echo "  make cpp-test     Compile + run cpp/test/*.cpp locally (catches C++ logic bugs)"
 	@echo "  make check        Run all static checks: lint-ascii + lint + cpp-check"
 	@echo "  make hooks        Install the git pre-commit hook (.githooks)"
-	@echo "  make deps         Install native C++ deps (BLAS, ...) via apt (Linux) / brew (macOS)"
+	@echo "  make deps         Install native C++ deps (OpenBLAS + clang toolchain) via apt (Linux) / brew (macOS)"
 	@echo "  make clean        Remove build artifacts"
 	@echo ""
 	@echo "  Override vars: JANK=, CLOJURE=, MAIN_NS=, MODULE_PATH=, CBLAS_LIBDIR="
@@ -101,8 +104,8 @@ lint:
 hooks:
 	@git config core.hooksPath .githooks && echo "git hooks installed (core.hooksPath=.githooks)"
 
-# Native C++ dependencies for the cpp/ interop layer (see cpp/README.md). Run on
-# the devbox before the BLAS spike. Extend APT_DEPS / BREW_DEPS as the layer grows.
+# Native C++ dependencies for the cpp/ interop layer (see cpp/README.md). Run once
+# per machine. Extend APT_DEPS / BREW_DEPS as the layer grows.
 deps:
 	@case "$$(uname -s)" in \
 	  Linux)  echo ">> installing via apt: $(APT_DEPS)";  sudo apt-get update && sudo apt-get install -y $(APT_DEPS) ;; \
@@ -121,7 +124,9 @@ cpp-test:
 
 # Full static-check sweep, used by the pre-commit hook (and suitable for CI). Just
 # composes the independent targets -- lint-ascii / lint / cpp-check stay usable on
-# their own. Needs the C++ toolchain (clang + OpenBLAS headers) for cpp-check.
+# their own. cpp-check needs clang (via 'make deps'); when clang is absent it SKIPS
+# with a warning so non-C++ commits aren't blocked -- set CPP_STRICT=1 (e.g. in CI)
+# to make a missing compiler a hard failure instead.
 check: lint-ascii lint cpp-check
 	@echo "check: all passed"
 
