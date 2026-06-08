@@ -4,6 +4,11 @@ Notes to draw on when iterating on `jabla.autograd` / `jabla.tensor` past the
 first naive port. Two threads: how to make a hand-rolled autograd *fast*, and
 whether to lean on an existing LLVM/C++ AD engine instead.
 
+For the *design tensions* of making the tape tensor-aware (identity, buffer
+lifetime, vjp-as-data, accumulation) and which of them block the Step 4 GPT, see
+`docs/tape-design.md`. This doc is about tape *layout* and AD *engines*; that one
+is about tape *design decisions*.
+
 ## 1. Making a hand-rolled autograd fast (Rogozhnikov, 2023)
 
 Source: <https://arogozhnikov.github.io/2023/12/28/fastest-autograd.html>

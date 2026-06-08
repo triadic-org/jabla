@@ -30,7 +30,9 @@ the GPT order above.
 Ground truth lives in `reference/`: micrograd (step 1, grads vs PyTorch), llm.c's
 `train_gpt2.c` (steps 2-5, manual per-layer forward+backward), llama2.c's `run.c`
 (clean forward pass). When iterating on the autograd/tensor engine itself, see
-`docs/autograd-references.md` (fast-tape design + LLVM/C++ AD frameworks).
+`docs/autograd-references.md` (fast-tape layout + LLVM/C++ AD frameworks) and
+`docs/tape-design.md` (tensor-tape design tensions, PyTorch/TF2/Deep Diamond prior
+art, and which decisions gate the Step 4 GPT).
 
 ## Measurement
 Always log, for each shape: tokens/sec and step time; the **host (wall-clock) vs

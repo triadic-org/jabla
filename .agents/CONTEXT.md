@@ -5,7 +5,8 @@ A from-scratch ML library in **jank** (Clojure on LLVM/C++). Name = jank + nabla
 A learning project: port Karpathy's micrograd → nanoGPT ladder to jank to
 understand models bottom-up. Build order + validators in `docs/roadmap.md`; jank
 tooling notes/gotchas in `docs/jank-notes.md`; autograd design refs in
-`docs/autograd-references.md`. Remote: `git@github.com:triadic-org/jabla.git`.
+`docs/autograd-references.md`; tensor-tape design tensions + GPT blockers in
+`docs/tape-design.md`. Remote: `git@github.com:triadic-org/jabla.git`.
 
 **Working mode:** the user writes the ML/jank code themselves to learn. The
 assistant does scaffolding, boilerplate, tests, naming/comment passes, reviews,
