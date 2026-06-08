@@ -1,5 +1,6 @@
 (ns jabla.test-util
-  (:require [jabla.autograd :as ag]))
+  (:require [jabla.autograd :as ag]
+            [jabla.tensor :as tt]))
 
 ;; Domain test helpers (clojure.test is the framework; this is jabla-specific
 ;; assertions + oracles, used inside clojure.test's `is`).
@@ -49,3 +50,50 @@
                           (for [p (range k)]
                             (* (nth (nth a i) p)
                                (nth (nth b p) j))))))))))
+
+;; --- Tensor engine (node-on-tensor DAG) helpers -----------------------------
+
+(defn tensor-sum
+  "Sum of every element of a tensor -- the scalar objective the tensor grad-check
+  differentiates, so an input element's analytic grad should equal d(sum out)/d(elt)."
+  [t]
+  (reduce + 0.0 (vec (flatten (tt/->vectors t)))))
+
+(defn- rebuild-inputs
+  "Reconstruct the input tensors from flat data + shapes, with input `i`'s flat
+  element `j` bumped by `delta` (all others unchanged). Fresh tensors each call --
+  a node-on-tensor forward is pure (no global tape), so perturbations need no reset
+  between them, unlike the scalar grad-check."
+  [flats shapes i j delta]
+  (mapv (fn [k]
+          (let [xs (nth flats k)
+                xs (if (= k i) (assoc xs j (+ (nth xs j) delta)) xs)]
+            (tt/->tensor (tt/reshape xs (nth shapes k)))))
+        (range (count flats))))
+
+(defn tensor-grad-check
+  "Tensor analogue of grad-check for the stage-1 engine. `build` takes a vector of
+  input tensors and returns the output tensor; `inputs` is a vector of nested-vector
+  input data. Objective is sum(output): each input element's analytic gradient must
+  match the central finite difference of sum(build inputs), within an f32-appropriate
+  tolerance. Use as (is (tensor-grad-check build inputs)).
+
+  Assumes the stage-1 API: (backward! root) returns the grads and (grad grads t)
+  reads one out -- adjust those two calls if your signatures differ. f32 buffers
+  force a looser h/tol than the scalar (f64) check; both forwards so far are linear,
+  so central differences are roundoff-exact regardless of h."
+  [build inputs]
+  (let [in-tensors (mapv tt/->tensor inputs)
+        output     (build in-tensors)
+        grads      (tt/backward! output)
+        analytic   (mapv (fn [t] (vec (flatten (tt/->vectors (tt/grad grads t))))) in-tensors)
+        shapes     (mapv tt/get-shape in-tensors)
+        flats      (mapv (fn [v] (vec (flatten v))) inputs)
+        h          1e-2
+        sum-at     (fn [i j delta] (tensor-sum (build (rebuild-inputs flats shapes i j delta))))
+        match?     (fn [a n] (<= (abs (- a n)) (+ 1e-2 (* 1e-2 (abs a)))))
+        results    (vec (for [i (range (count inputs))
+                              j (range (count (nth flats i)))]
+                          (let [numerical (/ (- (sum-at i j h) (sum-at i j (- h))) (* 2.0 h))]
+                            (match? (nth (nth analytic i) j) numerical))))]
+    (every? true? results)))

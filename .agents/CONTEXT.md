@@ -5,14 +5,29 @@ A from-scratch ML library in **jank** (Clojure on LLVM/C++). Name = jank + nabla
 A learning project: port Karpathy's micrograd → nanoGPT ladder to jank to
 understand models bottom-up. Build order + validators in `docs/roadmap.md`; jank
 tooling notes/gotchas in `docs/jank-notes.md`; autograd design refs in
-`docs/autograd-references.md`; tensor-tape design tensions + GPT blockers in
-`docs/tape-design.md`. Remote: `git@github.com:triadic-org/jabla.git`.
+`docs/autograd-references.md`; the tensor engine architecture (chosen direction,
+design tensions, staged roadmap, prior art) in `docs/engine-design.md`.
+Remote: `git@github.com:triadic-org/jabla.git`.
 
 **Working mode:** the user writes the ML/jank code themselves to learn. The
 assistant does scaffolding, boilerplate, tests, naming/comment passes, reviews,
 and research — NOT the ML implementation unless explicitly asked.
 
-## Current state (June 2026) — Steps 1-2 done, Step 3 in progress
+## Direction (decided 2026-06-08) — Step 3 reframed
+Step 3 is **not** a micrograd-to-matrices port (the scalar work already taught the
+chain rule). It's building a **frontier-shaped autograd engine**, complexity added
+progressively. After reasoning end-first (best architecture = deferred explicit
+graph-as-IR over dispatchable kernels — JAX/tinygrad/ggml), we chose the **middle
+path**: author eager now, but reify the graph as a value so deferred/fused/multi-
+backend stays open. Representation = **node-on-tensor DAG** (the tensor map carries
+`:op` + `:inputs`; the graph IS the immutable tensor DAG, like PyTorch grad_fn /
+tinygrad _ctx) — no global tape, no threaded tape. vjp-as-data keyed by `:op`.
+`backward!` returns grads (no global); `grad` is a lookup. GAN/actor-critic aren't
+foreclosed — PyTorch does them via `detach` + separate optimizers (a future op),
+not multiple tapes. Full decision + the staged eager→lazy→fused→backend roadmap:
+`docs/engine-design.md`.
+
+## Current state (June 2026) — Steps 1-2 done, Step 3 (engine, stage 1) in progress
 - **Step 1 (scalar reverse-mode autograd): COMPLETE.** `src/jabla/autograd.jank`,
   tape design, green. Tests in `test/jabla/autograd_test.jank`: unit (per-op exact)
   + compositions + numerical `grad-check` + a micrograd oracle anchor.
@@ -29,9 +44,11 @@ and research — NOT the ML implementation unless explicitly asked.
   `jabla::add` kernel (no BLAS) + jank wrapper, green in both the C++ doctest and
   the jank suite. `add` is rank-agnostic (passes the input shape straight through,
   unlike matmul's 2-D `[m n]`); the buffer accessors are a by-value-sink
-  `createTensor` (move-in) + reference reads from the registry. Remaining (all of
-  milestone 4): the **tensor tape** (node = {output id, input ids, vjp}) +
-  `backward!` / `grad`.
+  `createTensor` (move-in) + reference reads from the registry. The forwards now
+  also **record their graph node** (`:op` + `:inputs`; leaves are `:op :leaf`).
+  Remaining (stage 1): `vjp-rules` (`:add` passthrough, `:matmul` two-matmuls +
+  transposes), `backward!` (reverse-topo walk + vjp dispatch + sum-on-reuse), and
+  `grad` -- all scaffolded as contract stubs in `tensor.jank` (bodies are yours).
 
 ## C++ interop (settled)
 - All native code in `cpp/include/jabla.hpp` under `namespace jabla`. jank calls
@@ -61,24 +78,25 @@ and research — NOT the ML implementation unless explicitly asked.
   no `--version` (use `check-health`); no `(catch :default ...)`; don't shadow
   core names you call.
 
-## Next steps
-- [ ] **Milestone 4 -- the tensor tape + backward.** Design first (see
-      `docs/tape-design.md`): decide what a node holds -- node = {output id,
-      input ids, vjp}, where `vjp` takes the upstream gradient tensor and returns
-      one gradient tensor per input -- and whether ops record onto the tape
-      implicitly (forward also pushes a node, like `jabla.autograd`) or it's
-      threaded explicitly. Settle gradient accumulation (a map `id -> grad-tensor`,
-      summed when an id is reused).
-- [ ] Implement the vjps: `add` first (gradient passes straight through to both
-      inputs -- trivial, good for wiring the tape), then `matmul`
-      (`dA = dY . Bt`, `dB = At . dY` -- both matmuls back through
-      `cpp/jabla.matmul`). Open sub-decision: get the transposes from sgemm's
-      `CblasTrans` flag (free) vs a separate transpose op.
-- [ ] Validate with a tensor finite-difference grad-check (generalize
-      `autograd_test`'s `grad-check`: perturb each input element +-h, compare
-      `backward!`'s analytic grad to the central difference of `sum(forward)`)
-      before trusting the vjps.
-- [ ] (later) Step 4: full GPT op set -> one attention block vs PyTorch -> nanoGPT.
+## Next steps (stage 1 -- eager backward over the node-on-tensor DAG)
+Scaffolding is in place (contract stubs in `tensor.jank`; `tu/tensor-grad-check` +
+three RED-but-vacuous deftests in `tensor_test.jank` -- `add-backward`,
+`matmul-backward`, `weight-tying-sums`). The engine logic is the user's to write:
+- [ ] Populate `vjp-rules`: `:add` (pass grad-out through to both inputs), then
+      `:matmul` (`dA = dY . Bt`, `dB = At . dY` -- both back through
+      `cpp/jabla.matmul`). Open sub-decision: transposes from sgemm's `CblasTrans`
+      flag (free) vs a separate transpose op.
+- [ ] Implement `backward!` (seed ones at root; reverse-topo walk via `:inputs`;
+      dispatch vjp by `:op`; accumulate per buffer id, **summing on reuse**) and
+      `grad` (look up by `(:id t)` in the returned grads).
+- [ ] Turn the three deftests green: uncomment bodies, wire `add-backward` first
+      (vjp is trivial -- best for wiring the walk), then `matmul-backward`, then
+      `weight-tying-sums` (the sum-on-reuse correctness gate). Adjust the helper's
+      two API calls if your `backward!`/`grad` signatures differ.
+- [ ] Re-verify on the devbox: `make test` + `make cpp-test`.
+- [ ] (later stages, see `docs/engine-design.md`) arena/free -> lazy realize ->
+      fusion -> backend dispatch; plus a `detach` op for GAN/actor-critic, and the
+      rest of the GPT op set toward one attention block vs PyTorch.
 
 > Local-only project notes (full brief, research angle) live in `private/`
 > (gitignored, not published).

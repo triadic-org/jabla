@@ -10,34 +10,41 @@
 ;; (log to experiments/). References: reference/llm.c, reference/nanoGPT.
 ;;
 ;; The op forwards (matmul + add) run on the native kernels in jabla.hpp; the
-;; tensor-level tape (node + vjp) and backward! are the remaining work.
+;; eager explicit-graph engine (backward! over a node-on-tensor DAG) is next.
 ;; ============================================================================
 
 ;; --- Representation (decided) -----------------------------------------------
-;; A tensor is a jank map: {:shape [d0 d1 ...] :dtype :f32 :id <handle>}.
-;;   - :shape -- dimension sizes (row-major), a plain jank vector.
-;;   - :dtype -- :f32 in the buffer (matches sgemm and the GPU end-state); the
+;; A tensor is a jank map. It carries both its data handle and its provenance --
+;; this IS the autograd graph (see below):
+;;   {:shape [d0 d1 ...] :dtype :f32 :id <handle> :op <kw> :inputs [t ...]}.
+;;   - :shape  -- dimension sizes (row-major), a plain jank vector.
+;;   - :dtype  -- :f32 in the buffer (matches sgemm and the GPU end-state); the
 ;;     jank API speaks doubles and narrows at the boundary. Carrying :dtype keeps
 ;;     fp16/bf16 a storage change later, not a rewrite.
-;;   - :id    -- index into a native float32 buffer C++ owns (jabla.hpp's
-;;     registry); the matmul kernel reads/writes these by id. Bulk data never
-;;     lives in jank: it holds only the handle and marshals at the edges
-;;     (->tensor / ->vectors). We went native from the start rather than via a
-;;     flat-doubles shortcut, since the BLAS interop path was already proven.
+;;   - :id     -- index into a native float32 buffer C++ owns (jabla.hpp's
+;;     registry); kernels read/write these by id. Bulk data never lives in jank:
+;;     it holds only the handle and marshals at the edges (->tensor / ->vectors).
+;;   - :op     -- the op keyword that produced this tensor (:leaf for inputs,
+;;     :matmul / :add / ... for op results). Backward dispatches the vjp on this.
+;;   - :inputs -- the input tensors this was computed from ([] for a leaf). These
+;;     references ARE the graph edges.
 
-;; --- Autograd (the core design task) ----------------------------------------
-;; Reuse jabla.autograd's tape, generalized: a node carries a *tensor* payload and
-;; a local vjp (vector-Jacobian product) instead of a scalar partial. Each op
-;; records {forward-tensor, input-ids, vjp}; backward is the same reverse scan,
-;; but each step pushes a tensor gradient into its inputs and accumulates.
+;; --- Autograd: node-on-tensor DAG (decided 2026-06-08) ----------------------
+;; The graph is the immutable tensor DAG itself: each op result carries its :op +
+;; :inputs, so the tensor you hold IS its graph node (PyTorch grad_fn / tinygrad
+;; _ctx). No global tape, no threaded tape -- the graph is already a value, and the
+;; same DAG becomes the lazy graph in a later stage. backward! walks it reverse-topo
+;; from a root, dispatches each node's vjp by :op (vjp-as-data, a rule registry),
+;; and accumulates grads per buffer id -- SUMMING when an id is used more than once
+;; (weight-tying correctness; see engine-design.md #5).
 ;;   Key insight: matmul's vjp is itself two matmuls of the upstream gradient with
 ;;   the inputs (work out which sides/transposes) -- so backward *also* routes
-;;   through the matmul kernel (cpp/jabla.matmul). Derive the rest like the scalars.
-;; See docs/autograd-references.md (the flat-tape / vjp design).
+;;   through the matmul kernel (cpp/jabla.matmul). add's vjp passes the grad through.
+;; Full decision + the staged eager -> lazy -> fused roadmap: docs/engine-design.md.
 
 ;; --- Public surface ---------------------------------------------------------
-;; Construction + readback + matmul + add forwards are done; the tape + backward
-;; are next.
+;; Construction + readback + matmul + add forwards are done; recording provenance
+;; on the forwards + backward! / grad over the DAG are next (stage 1).
 
 (defn- shape-of
   "Infer a row-major shape from nested vectors: count siblings at each depth,
@@ -54,9 +61,11 @@
   [v]
   (let [shape (shape-of v)
         t-id  (cpp/jabla.createTensor (-> v flatten vec))]
-    {:shape shape
-     :dtype DEFAULT_DTYPE
-     :id    t-id}))
+    {:shape  shape
+     :dtype  DEFAULT_DTYPE
+     :id     t-id
+     :op     :leaf      ; a graph leaf -- backward accumulates a grad here, stops
+     :inputs []}))
 
 (defn get-shape
   "Vector of dimension sizes."
@@ -100,11 +109,12 @@
   (let [raw-v (-> t :id cpp/jabla.getTensor)]
     (reshape raw-v (get-shape t))))
 
-;; --- Op model: every op is forward + vjp, recorded on the tape --------------
+;; --- Op model: every op is forward + vjp, recorded on the DAG ---------------
 ;; An op here is the tensor analogue of a scalar autograd op (jabla.autograd): a
-;; forward computation PLUS a recorded backward (vjp -- vector-Jacobian product)
-;; so backward! can replay it in reverse. Forward + vjp + tape node, always both;
-;; ops differ only in what the forward computes:
+;; forward computation that ALSO records its node on the graph -- it tags the
+;; result with :op + :inputs, so the returned tensor is its own graph node and
+;; backward! can walk + dispatch the vjp (vector-Jacobian product) by :op. Forward
+;; + recorded node, always both; ops differ only in what the forward computes:
 ;;   matmul         (m x k).(k x n) matrix product -- contraction, BLAS kernel
 ;;   add            a + b elementwise              -- vjp passes grad through
 ;;   mul            a * b ELEMENTWISE (Hadamard)   -- NOT matmul; dA=dY*b, dB=dY*a
@@ -117,52 +127,76 @@
 ;; forward is a BLAS call only for the contraction ops; add/relu are plain
 ;; elementwise loops. The common thread is the tape, not BLAS.
 ;;
-;; Forwards landed first (matmul + add, milestones 2-3); the tape node + vjp
-;; arrive with backward! (milestone 4). The ops below are forward-only for now.
+;; The forwards now also record their graph node (:op + :inputs); the vjp rules
+;; that consume those nodes live in the vjp-rules registry below (TODO(you)).
 
 (defn matmul
   "a (m x k) . b (k x n) -> (m x n). Forward via the native cblas_sgemm kernel
-  (cpp/jabla.matmul). vjp -- two matmuls of the upstream gradient with a and b --
-  is recorded once the tape lands (milestone 4); forward-only for now."
+  (cpp/jabla.matmul), tagged as a :matmul node over [t1 t2]. vjp (in vjp-rules) is
+  two matmuls of the upstream gradient with a and b -- work out the sides/transposes
+  -- routed back through cpp/jabla.matmul."
   [t1 t2]
   (let [[m k] (get-shape t1)
         [_ n] (get-shape t2)
         t3-id (cpp/jabla.matmul (:id t1) (:id t2) m n k)]
-    {:shape [m n] :dtype (get-dtype t1) :id t3-id}))
+    {:shape [m n] :dtype (get-dtype t1) :id t3-id :op :matmul :inputs [t1 t2]}))
 
 (defn add
   "Elementwise a + b (same shape for now; broadcasting later). Forward via the
   native cpp/jabla.add kernel; the result carries a's shape unchanged (add is
-  rank-agnostic, unlike matmul). vjp passes the gradient straight through to both
-  inputs (with broadcasting, later, sum it back down to each input's shape); it's
-  recorded once the tape lands (milestone 4)."
+  rank-agnostic, unlike matmul), tagged as an :add node over [t1 t2]. vjp (in
+  vjp-rules) passes the gradient straight through to both inputs (with broadcasting,
+  later, sum it back down to each input's shape)."
   [t1 t2]
   (let [t3-id (cpp/jabla.add (:id t1) (:id t2))]
-    {:shape (get-shape t1) :dtype (get-dtype t1) :id t3-id}))
+    {:shape (get-shape t1) :dtype (get-dtype t1) :id t3-id :op :add :inputs [t1 t2]}))
 
-;; TODO(you): the GPT op set, each = forward + vjp, validated vs PyTorch:
-;;   mul, relu/gelu, softmax, layernorm, embedding lookup, cross-entropy.
+;; TODO(you): the GPT op set, each = forward (records its node) + a vjp rule,
+;; validated vs PyTorch: mul, relu/gelu, softmax, layernorm, embedding, cross-entropy.
 
-;; --- Backward ----------------------------------------------------------------
+;; --- Backward (stage 1 -- TODO(you)) -----------------------------------------
+;; The engine is three pieces: a vjp-rules registry (op -> backward rule),
+;; backward! (walk the DAG, dispatch, accumulate), and grad (read a result out).
+;; Scaffolded as contracts; the traversal + the calculus are yours to implement.
+
+(def vjp-rules
+  "Registry mapping an :op keyword to its vjp (vector-Jacobian product) rule --
+  vjp-as-data, the inspectable form (not closures). Suggested rule shape:
+
+    (fn [node grad-out] -> [grad-for-input-0 grad-for-input-1 ...])
+
+  where `node` is the op-result tensor (carries :inputs, :shape, :id) and
+  `grad-out` is the upstream gradient tensor; the rule returns one gradient tensor
+  per entry in (:inputs node), to be accumulated into those inputs. Adjust the
+  signature to taste -- it's the seam, not a mandate.
+
+  TODO(you): populate
+    :add    -- pass grad-out straight through to both inputs ([grad-out grad-out]).
+    :matmul -- two matmuls: dA = grad-out . Bt, dB = At . grad-out (sort out the
+               transposes; route through cpp/jabla.matmul, add a transpose helper)."
+  {})
 
 (defn backward!
-  "Seed the root gradient (ones), reverse-scan the tape, accumulate tensor
-  gradients into each node's inputs (same structure as jabla.autograd/backward!)."
+  "Reverse-mode backward over the node-on-tensor DAG rooted at `root`.
+  Contract (stage 1):
+    - seed the root's gradient (ones of root's shape -- this makes grad correspond
+      to d(sum root)/d(input), which the finite-diff grad-check checks against);
+    - visit nodes in reverse-topological order from root (a non-:leaf node's edges
+      are its :inputs);
+    - at each node, look up (vjp-rules (:op node)), call it with the node's
+      accumulated grad, and ACCUMULATE the returned gradients into its inputs --
+      SUMMING when an input id is reached more than once (weight-tying correctness);
+    - return the accumulated gradients (keyed so `grad` can find them by tensor).
+  No global state -- the returned grads ARE the result (collapse to a stored form
+  later if you prefer). TODO(you)."
   [_root]
   (throw (ex-info "not implemented" {})))
 
 (defn grad
-  "Accumulated gradient tensor for a leaf (after backward!)."
-  [_t]
+  "Look up the accumulated gradient tensor for `t` in the grads returned by
+  backward! (e.g. by (:id t)). TODO(you)."
+  [_grads _t]
   (throw (ex-info "not implemented" {})))
 
-;; --- Milestones (suggested order) -------------------------------------------
-;; 1. [done] ->tensor / get-shape / get-dtype / reshape / ->vectors on the
-;;    native C++ registry (jabla.hpp).
-;; 2. [done] matmul forward via native cblas (jabla.hpp); checked vs
-;;    matmul-reference (test-util) -- square + rectangular.
-;; 3. [done] add forward (elementwise, jabla.hpp); checked vs a hand oracle.
-;; 4. the tensor tape (node + vjp, recorded by each op) + backward! for matmul
-;;    and add; gradient-check via finite differences (reuse the grad-check idea
-;;    from test/jabla/autograd_test.jank) before trusting it.
-;; 5. then the rest of the op set, building toward one attention block vs PyTorch.
+;; Stage roadmap (eager backward -> arena lifetime -> lazy realize -> fusion ->
+;; backend dispatch) lives in docs/engine-design.md. This file is stage 1.

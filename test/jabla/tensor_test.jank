@@ -105,21 +105,47 @@
       (is (tu/approx? 11.0 (get-in c [0 0]) 1e-6))
       (is (tu/approx? 44.0 (get-in c [1 1]) 1e-6)))))
 
-;; --- Milestone 4: backward (tensor gradient-check) ---
-;; The tensor analogue of autograd's grad-check: perturb each input element by +-h,
-;; compare backward!'s analytic grad to the central finite difference of a scalar
-;; reduction (e.g. sum) of the output. Build a small helper like test-util/grad-check
-;; but over tensor elements.
-(deftest matmul-backward
-  (testing "matmul gradients vs finite differences"
-    ;; (let [a (tt/->tensor [[1.0 2.0] [3.0 4.0]])
-    ;;       b (tt/->tensor [[5.0 6.0] [7.0 8.0]])
-    ;;       y (tt/matmul a b)]
-    ;;   (tt/backward! y)
-    ;;   ;; for d(sum y)/da: each element of (tt/grad a) ~ finite diff of sum(matmul)
-    ;;   (is ...))
+;; --- Stage 1: backward over the node-on-tensor DAG ---------------------------
+;; The engine validation. tu/tensor-grad-check is the tensor analogue of the scalar
+;; grad-check: it perturbs each input element by +-h and compares backward!'s analytic
+;; grad to the central finite difference of sum(output) (see test-util). `build` takes
+;; a vector of input tensors and returns the output tensor; inputs are nested vectors.
+;; Bodies stay commented (with a vacuous (is true)) until backward! / grad land;
+;; uncomment as you implement. These assume the stage-1 API: (backward! root) returns
+;; the grads, (grad grads t) reads one out -- if your signatures differ, adjust the
+;; helper's two calls (test-util) and these.
+
+;; add's vjp passes the gradient straight through; analytic grad of every input
+;; element is exactly 1 (d(sum (a+b))/d any element = 1). The simplest engine test --
+;; wire backward! against this first.
+(deftest add-backward
+  (testing "elementwise add gradients vs finite differences"
+    ;; (is (tu/tensor-grad-check (fn [[a b]] (tt/add a b))
+    ;;                           [[[1.0 2.0] [3.0 4.0]]
+    ;;                            [[10.0 20.0] [30.0 40.0]]]))
     (is true)))
 
-;; --- Milestone 5+: GPT op set (mul, relu/gelu, softmax, layernorm, embedding,
-;; cross-entropy), then one attention block element-wise vs PyTorch. Add deftests
-;; here as each op + its vjp lands.
+;; matmul's vjp = two matmuls with transposes (dA = dY . Bt, dB = At . dY). The
+;; rectangular shapes catch transpose/leading-dim mistakes the square case hides.
+(deftest matmul-backward
+  (testing "matmul gradients vs finite differences"
+    ;; (is (tu/tensor-grad-check (fn [[a b]] (tt/matmul a b))
+    ;;                           [[[1.0 2.0 3.0] [4.0 5.0 6.0]]      ; 2x3
+    ;;                            [[5.0 6.0] [7.0 8.0] [9.0 10.0]]])) ; 3x2
+    (is true)))
+
+;; Weight-tying correctness gate (engine-design.md #5): one tensor used in two
+;; places must have its two upstream gradients SUMMED, not overwritten. GPT ties the
+;; input embedding to the output projection, so an overwrite path silently trains
+;; wrong. Here a feeds both sides of an add; d(sum (a+a))/d(a elt) = 2, and the
+;; grad-check's finite difference will only agree if backward sums.
+(deftest weight-tying-sums
+  (testing "a tensor used twice accumulates (sums) its gradients"
+    ;; (is (tu/tensor-grad-check (fn [[a]] (tt/add a a))
+    ;;                           [[[1.0 2.0] [3.0 4.0]]]))
+    (is true)))
+
+;; --- Stage 5+ (later stages): GPT op set (mul, relu/gelu, softmax, layernorm,
+;; embedding, cross-entropy) + a detach op (GAN / actor-critic), then one attention
+;; block element-wise vs PyTorch. Add deftests here as each op + its vjp lands. The
+;; lazy-realize / fusion / backend stages are tracked in docs/engine-design.md.
