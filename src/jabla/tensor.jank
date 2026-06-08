@@ -127,7 +127,7 @@
   (let [[m k] (get-shape t1)
         [_ n] (get-shape t2)
         t3-id (cpp/jabla.matmul (:id t1) (:id t2) m n k)]
-    {:shape [m n] :dtype DEFAULT_DTYPE :id t3-id}))
+    {:shape [m n] :dtype (get-dtype t1) :id t3-id}))
 
 (defn add
   "Elementwise a + b (same shape for now; broadcasting later). Forward via
@@ -136,9 +136,8 @@
   gradient straight through to both inputs (with broadcasting, later, sum it back
   down to each input's shape). TODO(you): forward now; tape node at milestone 4."
   [t1 t2]
-  (let [[m n] (get-shape t1)
-        t3-id (cpp/jabla.add (:id t1) (:id t2))]
-    {:shape [m n] :dtype DEFAULT_DTYPE :id t3-id}))
+  (let [t3-id (cpp/jabla.add (:id t1) (:id t2))]
+    {:shape (get-shape t1) :dtype (get-dtype t1) :id t3-id}))
 
 ;; TODO(you): the GPT op set, each = forward + vjp, validated vs PyTorch:
 ;;   mul, relu/gelu, softmax, layernorm, embedding lookup, cross-entropy.

@@ -54,8 +54,8 @@ inline int matmul(int aId, int bId, int m, int n, int k) {
 // no BLAS -- just a loop. Broadcasting comes later. Mirror matmul's tail:
 // push_back(std::move(result)); return (int)tensors.size() - 1;
 inline int add(int aId, int bId) {
-  std::vector<float>& a = tensors.at(aId);
-  std::vector<float>& b = tensors.at(bId);
+  const std::vector<float>& a = tensors.at(aId);
+  const std::vector<float>& b = tensors.at(bId);
   // TODO: validate a and b exist and have correct dimensions
  
   std::vector<float> c(a.size());
