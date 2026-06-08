@@ -24,9 +24,14 @@ and research — NOT the ML implementation unless explicitly asked.
 - **Step 3 (tensors on native BLAS): IN PROGRESS.** `src/jabla/tensor.jank`:
   tensor = `{:shape :dtype :id}` over the C++ registry (bulk data stays in C++,
   marshaled only at the edges). `->tensor` / `reshape` (core.matrix-style) /
-  `->vectors` and `matmul` forward are done + tested (square + rectangular). `add`
-  is scaffolded (`jabla::add` C++ stub + RED tests). Remaining: `add` forward,
-  then the **tensor tape** + `backward!` / `grad`.
+  `->vectors` and the **`matmul` + `add` forwards** are done + tested. matmul
+  validated vs `matmul-reference` (square + rectangular); `add` is the elementwise
+  `jabla::add` kernel (no BLAS) + jank wrapper, green in both the C++ doctest and
+  the jank suite. `add` is rank-agnostic (passes the input shape straight through,
+  unlike matmul's 2-D `[m n]`); the buffer accessors are a by-value-sink
+  `createTensor` (move-in) + reference reads from the registry. Remaining (all of
+  milestone 4): the **tensor tape** (node = {output id, input ids, vjp}) +
+  `backward!` / `grad`.
 
 ## C++ interop (settled)
 - All native code in `cpp/include/jabla.hpp` under `namespace jabla`. jank calls
@@ -57,17 +62,22 @@ and research — NOT the ML implementation unless explicitly asked.
   core names you call.
 
 ## Next steps
-- [ ] **First, re-verify on the devbox:** `make test`. The BLAS-spike retirement
-      rewired the runner (dropped the `blas` suite) and moved `matmul-reference`
-      into `test-util`; local lint/cpp-check are green, but the jank suite hasn't
-      run since that change. Expect `autograd` + `tensor` green (`add-forward` is
-      still a vacuous `(is true)` until `add` lands).
-- [ ] Implement `jabla::add` (elementwise) in `jabla.hpp` + the jank `add` wrapper;
-      turn the add tests green (`make cpp-test` + uncomment `add-forward`).
-- [ ] Design + build the **tensor tape**: node = {output id, input ids, vjp};
-      generalize the scalar tape to tensor payloads. Then `backward!` (matmul's vjp
-      = two matmuls, routing back through `cpp/jabla.matmul`) + `grad`, validated
-      with a tensor finite-difference grad-check.
+- [ ] **Milestone 4 -- the tensor tape + backward.** Design first (see
+      `docs/tape-design.md`): decide what a node holds -- node = {output id,
+      input ids, vjp}, where `vjp` takes the upstream gradient tensor and returns
+      one gradient tensor per input -- and whether ops record onto the tape
+      implicitly (forward also pushes a node, like `jabla.autograd`) or it's
+      threaded explicitly. Settle gradient accumulation (a map `id -> grad-tensor`,
+      summed when an id is reused).
+- [ ] Implement the vjps: `add` first (gradient passes straight through to both
+      inputs -- trivial, good for wiring the tape), then `matmul`
+      (`dA = dY . Bt`, `dB = At . dY` -- both matmuls back through
+      `cpp/jabla.matmul`). Open sub-decision: get the transposes from sgemm's
+      `CblasTrans` flag (free) vs a separate transpose op.
+- [ ] Validate with a tensor finite-difference grad-check (generalize
+      `autograd_test`'s `grad-check`: perturb each input element +-h, compare
+      `backward!`'s analytic grad to the central difference of `sum(forward)`)
+      before trusting the vjps.
 - [ ] (later) Step 4: full GPT op set -> one attention block vs PyTorch -> nanoGPT.
 
 > Local-only project notes (full brief, research angle) live in `private/`
