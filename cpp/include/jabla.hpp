@@ -20,7 +20,7 @@ inline std::vector<std::vector<float>> tensors;
 
 inline int createTensor(std::vector<float> vector) {
   int idx = tensors.size();
-  tensors.push_back(vector);
+  tensors.push_back(std::move(vector));
   return idx;
 }
 
@@ -36,6 +36,7 @@ inline void clearTensors() {
 // registry buffers, writes the result as a NEW registry tensor, returns its id.
 // Param order is cblas's M, N, K. Row-major leading dims: lda=k, ldb=n, ldc=n.
 inline int matmul(int aId, int bId, int m, int n, int k) {
+  // TODO: validate a and b exist and have correct dimensions
   std::vector<float> c(m * n, 0.0f);
 
   cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
@@ -44,8 +45,7 @@ inline int matmul(int aId, int bId, int m, int n, int k) {
               tensors.at(bId).data(), n, 0.0f,
               c.data(), n);
 
-  tensors.push_back(std::move(c));
-  return (int)tensors.size() - 1;
+  return createTensor(std::move(c));
 }
 
 // add kernel (scaffold -- body is yours): elementwise a + b, same shape. Reads
@@ -54,7 +54,14 @@ inline int matmul(int aId, int bId, int m, int n, int k) {
 // no BLAS -- just a loop. Broadcasting comes later. Mirror matmul's tail:
 // push_back(std::move(result)); return (int)tensors.size() - 1;
 inline int add(int aId, int bId) {
-  return -1; // TODO(you): sum tensors.at(aId) + tensors.at(bId) into a new tensor
+  std::vector<float>& a = tensors.at(aId);
+  std::vector<float>& b = tensors.at(bId);
+  // TODO: validate a and b exist and have correct dimensions
+ 
+  std::vector<float> c(a.size());
+  for(std::size_t i = 0; i < c.size(); ++i) c[i] = a[i] + b[i];
+  
+  return createTensor(std::move(c));
 }
 
 } // namespace jabla
