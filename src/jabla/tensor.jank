@@ -9,8 +9,8 @@
 ;; element-wise; end-to-end, nanoGPT's loss-per-step curve on TinyShakespeare
 ;; (log to experiments/). References: reference/llm.c, reference/nanoGPT.
 ;;
-;; Step 2 landed the native matmul kernel (cblas_sgemm in jabla.hpp).
-;; SCAFFOLD ONLY -- the op forwards and the tensor-level backward are the work.
+;; The op forwards (matmul + add) run on the native kernels in jabla.hpp; the
+;; tensor-level tape (node + vjp) and backward! are the remaining work.
 ;; ============================================================================
 
 ;; --- Representation (decided) -----------------------------------------------
@@ -36,7 +36,8 @@
 ;; See docs/autograd-references.md (the flat-tape / vjp design).
 
 ;; --- Public surface ---------------------------------------------------------
-;; Construction + readback + matmul are done; add forward + the tape are next.
+;; Construction + readback + matmul + add forwards are done; the tape + backward
+;; are next.
 
 (defn- shape-of
   "Infer a row-major shape from nested vectors: count siblings at each depth,
@@ -116,8 +117,8 @@
 ;; forward is a BLAS call only for the contraction ops; add/relu are plain
 ;; elementwise loops. The common thread is the tape, not BLAS.
 ;;
-;; Forwards land first (milestones 2-3); the tape node + vjp arrive with backward!
-;; (milestone 4). matmul below is forward-only for now.
+;; Forwards landed first (matmul + add, milestones 2-3); the tape node + vjp
+;; arrive with backward! (milestone 4). The ops below are forward-only for now.
 
 (defn matmul
   "a (m x k) . b (k x n) -> (m x n). Forward via the native cblas_sgemm kernel
@@ -130,11 +131,11 @@
     {:shape [m n] :dtype (get-dtype t1) :id t3-id}))
 
 (defn add
-  "Elementwise a + b (same shape for now; broadcasting later). Forward via
-  cpp/jabla.add on the registry buffers -> a new tensor of a's shape (mirror
-  matmul: pull :ids, call the kernel, wrap {:shape :dtype :id}). vjp passes the
-  gradient straight through to both inputs (with broadcasting, later, sum it back
-  down to each input's shape). TODO(you): forward now; tape node at milestone 4."
+  "Elementwise a + b (same shape for now; broadcasting later). Forward via the
+  native cpp/jabla.add kernel; the result carries a's shape unchanged (add is
+  rank-agnostic, unlike matmul). vjp passes the gradient straight through to both
+  inputs (with broadcasting, later, sum it back down to each input's shape); it's
+  recorded once the tape lands (milestone 4)."
   [t1 t2]
   (let [t3-id (cpp/jabla.add (:id t1) (:id t2))]
     {:shape (get-shape t1) :dtype (get-dtype t1) :id t3-id}))
@@ -160,7 +161,8 @@
 ;;    native C++ registry (jabla.hpp).
 ;; 2. [done] matmul forward via native cblas (jabla.hpp); checked vs
 ;;    matmul-reference (test-util) -- square + rectangular.
-;; 3. add forward + tape recording for both ops.
-;; 4. backward! for matmul + add; gradient-check via finite differences (reuse
-;;    the grad-check idea from test/jabla/autograd_test.jank) before trusting it.
+;; 3. [done] add forward (elementwise, jabla.hpp); checked vs a hand oracle.
+;; 4. the tensor tape (node + vjp, recorded by each op) + backward! for matmul
+;;    and add; gradient-check via finite differences (reuse the grad-check idea
+;;    from test/jabla/autograd_test.jank) before trusting it.
 ;; 5. then the rest of the op set, building toward one attention block vs PyTorch.
