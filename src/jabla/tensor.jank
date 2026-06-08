@@ -135,8 +135,10 @@
   matmul: pull :ids, call the kernel, wrap {:shape :dtype :id}). vjp passes the
   gradient straight through to both inputs (with broadcasting, later, sum it back
   down to each input's shape). TODO(you): forward now; tape node at milestone 4."
-  [_a _b]
-  (throw (ex-info "not implemented" {})))
+  [t1 t2]
+  (let [[m n] (get-shape t1)
+        t3-id (cpp/jabla.add (:id t1) (:id t2))]
+    {:shape [m n] :dtype DEFAULT_DTYPE :id t3-id}))
 
 ;; TODO(you): the GPT op set, each = forward + vjp, validated vs PyTorch:
 ;;   mul, relu/gelu, softmax, layernorm, embedding lookup, cross-entropy.

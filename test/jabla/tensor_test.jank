@@ -99,12 +99,11 @@
 ;; --- Milestone 3: elementwise add forward ---
 (deftest add-forward
   (testing "elementwise add"
-    ;; (let [a (tt/->tensor [[1.0 2.0] [3.0 4.0]])
-    ;;       b (tt/->tensor [[10.0 20.0] [30.0 40.0]])
-    ;;       c (tt/->vectors (tt/add a b))]
-    ;;   (is (tu/approx? 11.0 (get-in c [0 0]) 1e-6))
-    ;;   (is (tu/approx? 44.0 (get-in c [1 1]) 1e-6)))
-    (is true)))
+    (let [a (tt/->tensor [[1.0 2.0] [3.0 4.0]])
+          b (tt/->tensor [[10.0 20.0] [30.0 40.0]])
+          c (tt/->vectors (tt/add a b))]
+      (is (tu/approx? 11.0 (get-in c [0 0]) 1e-6))
+      (is (tu/approx? 44.0 (get-in c [1 1]) 1e-6)))))
 
 ;; --- Milestone 4: backward (tensor gradient-check) ---
 ;; The tensor analogue of autograd's grad-check: perturb each input element by +-h,
