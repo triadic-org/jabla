@@ -53,6 +53,17 @@
 
 ;; --- Tensor engine (node-on-tensor DAG) helpers -----------------------------
 
+(defn transpose-of
+  "Pure-jank 2-D transpose oracle (rows <-> cols): a is m x n nested vectors -> n x m.
+  Ground truth for the matmul vjp test (dA = dY . Bt, dB = At . dY) -- independent of
+  how tensor.jank computes transposes (a transpose op vs sgemm's CblasTrans flag)."
+  [a]
+  (let [m (count a)
+        n (count (first a))]
+    (vec (for [j (range n)]
+           (vec (for [i (range m)]
+                  (nth (nth a i) j)))))))
+
 (defn tensor-sum
   "Sum of every element of a tensor -- the scalar objective the tensor grad-check
   differentiates, so an input element's analytic grad should equal d(sum out)/d(elt)."

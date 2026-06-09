@@ -42,6 +42,9 @@
 ;;   through the matmul kernel (cpp/jabla.matmul). add's vjp passes the grad through.
 ;; Full decision + the staged eager -> lazy -> fused roadmap: docs/engine-design.md.
 
+
+
+
 ;; --- Public surface ---------------------------------------------------------
 ;; Construction + readback + matmul + add forwards are done; recording provenance
 ;; on the forwards + backward! / grad over the DAG are next (stage 1).
@@ -174,7 +177,12 @@
     :add    -- pass grad-out straight through to both inputs ([grad-out grad-out]).
     :matmul -- two matmuls: dA = grad-out . Bt, dB = At . grad-out (sort out the
                transposes; route through cpp/jabla.matmul, add a transpose helper)."
-  {})
+  {:add (fn [_ grad-out] [grad-out grad-out])
+   })
+
+(defn seed-gradients
+  [_root]
+  )
 
 (defn backward!
   "Reverse-mode backward over the node-on-tensor DAG rooted at `root`.

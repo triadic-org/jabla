@@ -114,16 +114,95 @@
 ;; uncomment as you implement. These assume the stage-1 API: (backward! root) returns
 ;; the grads, (grad grads t) reads one out -- if your signatures differ, adjust the
 ;; helper's two calls (test-util) and these.
+;;
+;; Build bottom-up: the BUILDING-BLOCK tests below check each piece of backward! in
+;; isolation (transpose, the vjp rules, topo-order) so a failure points at one part;
+;; the INTEGRATION tests after them exercise the whole backward via grad-check. Go
+;; green roughly top-to-bottom.
+
+;; --- Stage 1 building blocks (each independently green-able) -----------------
+
+;; transpose: prereq for the matmul vjp -- IF you add a standalone transpose op.
+;; (If you instead route transposes through sgemm's CblasTrans flag, there's no
+;; tt/transpose to test -- skip this one; matmul-vjp-rule below still covers the
+;; calculus either way, since it checks the rule's output, not how it transposes.)
+;; Data movement only (no arithmetic), so f32 round-trips exactly.
+(deftest transpose-forward
+  (testing "2-D transpose (2x3) -> (3x2): shape + values"
+    ;; (let [t (tt/transpose (tt/->tensor [[1.0 2.0 3.0] [4.0 5.0 6.0]]))
+    ;;       v (tt/->vectors t)]
+    ;;   (is (= [3 2] (tt/get-shape t)))
+    ;;   (is (tu/approx? 1.0 (get-in v [0 0]) 1e-6))
+    ;;   (is (tu/approx? 4.0 (get-in v [0 1]) 1e-6))   ; row 0 came from col 0
+    ;;   (is (tu/approx? 6.0 (get-in v [2 1]) 1e-6)))
+    (is true)))
+
+;; vjp rules IN ISOLATION -- the calculus, no backward!/topo-order needed. vjp-rules
+;; is a public def, and the forward builds the node (with :op + :inputs), so you can
+;; call the rule directly. Wire :add first (trivial), then :matmul.
+
+;; :add passes grad-out straight through to both inputs -> [grad-out grad-out].
+(deftest add-vjp-rule
+  (testing ":add vjp returns grad-out for both inputs"
+    (let [a  (tt/->tensor [[1.0 2.0] [3.0 4.0]])
+          b  (tt/->tensor [[5.0 6.0] [7.0 8.0]])
+          y  (tt/add a b)                          ; node: :op :add, :inputs [a b]
+          dy (tt/->tensor [[1.0 2.0] [3.0 4.0]])
+          [da db] ((tt/vjp-rules :add) y dy)]
+      (is (= (tt/->vectors dy) (tt/->vectors da)))
+      (is (= (tt/->vectors dy) (tt/->vectors db))))))
+
+;; :matmul -> [dA = dY . Bt, dB = At . dY], checked vs matmul-reference + transpose-of
+;; (test-util). Rectangular (2x3)(3x2) so a transposed/wrong-side rule fails on shape.
+(deftest matmul-vjp-rule
+  (testing ":matmul vjp = [dY . Bt, At . dY] vs reference"
+    ;; (let [av [[1.0 2.0 3.0] [4.0 5.0 6.0]]            ; a: 2x3
+    ;;       bv [[5.0 6.0] [7.0 8.0] [9.0 10.0]]         ; b: 3x2
+    ;;       a  (tt/->tensor av)  b (tt/->tensor bv)
+    ;;       y  (tt/matmul a b)                          ; 2x2
+    ;;       dyv [[1.0 1.0] [1.0 1.0]]                   ; upstream grad: 2x2
+    ;;       dy (tt/->tensor dyv)
+    ;;       [da db] ((tt/vjp-rules :matmul) y dy)
+    ;;       exp-da (tu/matmul-reference dyv (tu/transpose-of bv))   ; (2x2)(2x3) -> 2x3
+    ;;       exp-db (tu/matmul-reference (tu/transpose-of av) dyv)   ; (3x2)(2x2) -> 3x2
+    ;;       dav (tt/->vectors da)  dbv (tt/->vectors db)]
+    ;;   (is (= [2 3] (tt/get-shape da)))               ; dA matches a's shape
+    ;;   (is (= [3 2] (tt/get-shape db)))               ; dB matches b's shape
+    ;;   (is (tu/approx? (get-in exp-da [0 0]) (get-in dav [0 0]) 1e-4))
+    ;;   (is (tu/approx? (get-in exp-da [1 2]) (get-in dav [1 2]) 1e-4))
+    ;;   (is (tu/approx? (get-in exp-db [0 0]) (get-in dbv [0 0]) 1e-4))
+    ;;   (is (tu/approx? (get-in exp-db [2 1]) (get-in dbv [2 1]) 1e-4)))
+    (is true)))
+
+;; topo-order: the new piece (the scalar tape got order for free). Don't pin an exact
+;; order -- many are valid; check the INVARIANT: every node precedes all its :inputs
+;; (consumers before producers), and a reused node appears exactly once (dedup by :id).
+;; Needs tt/topo-order public, returning the reachable nodes root-first.
+(deftest topo-order-invariant
+  (testing "reverse-topo: each node precedes its inputs; reused node appears once"
+    ;; (let [a (tt/->tensor [[1.0]])
+    ;;       b (tt/->tensor [[2.0]])
+    ;;       y (tt/add (tt/add a b) a)        ; a fans out (input to inner add AND y)
+    ;;       order (tt/topo-order y)          ; vector of nodes, root first
+    ;;       ids   (mapv :id order)
+    ;;       pos   (zipmap ids (range))       ; :id -> index in order
+    ;;       precedes-inputs? (fn [node]
+    ;;                          (every? (fn [in] (< (pos (:id node)) (pos (:id in))))
+    ;;                                  (:inputs node)))]
+    ;;   (is (= (count ids) (count (set ids))))   ; no node twice (a deduped)
+    ;;   (is (every? precedes-inputs? order)))    ; every edge points "later" in order
+    (is true)))
+
+;; --- Stage 1 integration (whole backward via grad-check) --------------------
 
 ;; add's vjp passes the gradient straight through; analytic grad of every input
 ;; element is exactly 1 (d(sum (a+b))/d any element = 1). The simplest engine test --
 ;; wire backward! against this first.
 (deftest add-backward
   (testing "elementwise add gradients vs finite differences"
-    ;; (is (tu/tensor-grad-check (fn [[a b]] (tt/add a b))
-    ;;                           [[[1.0 2.0] [3.0 4.0]]
-    ;;                            [[10.0 20.0] [30.0 40.0]]]))
-    (is true)))
+    (is (tu/tensor-grad-check (fn [[a b]] (tt/add a b))
+                              [[[1.0 2.0] [3.0 4.0]]
+                               [[10.0 20.0] [30.0 40.0]]]))))
 
 ;; matmul's vjp = two matmuls with transposes (dA = dY . Bt, dB = At . dY). The
 ;; rectangular shapes catch transpose/leading-dim mistakes the square case hides.
