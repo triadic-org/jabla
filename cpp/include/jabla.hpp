@@ -32,17 +32,27 @@ inline void clearTensors() {
   tensors.clear();
 }
 
-// matmul kernel: a (m x k) . b (k x n) -> (m x n) via cblas_sgemm. Reads the two
-// registry buffers, writes the result as a NEW registry tensor, returns its id.
-// Param order is cblas's M, N, K. Row-major leading dims: lda=k, ldb=n, ldc=n.
-inline int matmul(int aId, int bId, int m, int n, int k) {
+// matmul kernel: op(a) (m x k) . op(b) (k x n) -> (m x n) via cblas_sgemm, where
+// op(x) is x or its transpose per transA/transB (CblasTrans reads the operand
+// transposed in place -- no copy; this is what the matmul vjp uses for dY.Bt and
+// At.dY). Reads the two registry buffers, writes the result as a NEW registry
+// tensor, returns its id. m, n, k are the OPERATION dims (post-transpose). The
+// row-major leading dim is the stored column count, so it depends on the flag:
+// lda = transA ? m : k, ldb = transB ? k : n, ldc = n.
+inline int matmul(int aId, int bId, int m, int n, int k, bool transA, bool transB) {
   // TODO: validate a and b exist and have correct dimensions
   std::vector<float> c(m * n, 0.0f);
 
-  cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+  // Leading dim is column count for CblasRowMajor
+  int lda = transA ? m : k;
+  int ldb = transB ? k : n;
+
+  cblas_sgemm(CblasRowMajor,
+              (transA ? CblasTrans : CblasNoTrans),
+              (transB ? CblasTrans : CblasNoTrans),
               m, n, k, 1.0f,
-              tensors.at(aId).data(), k,
-              tensors.at(bId).data(), n, 0.0f,
+              tensors.at(aId).data(), lda,
+              tensors.at(bId).data(), ldb, 0.0f,
               c.data(), n);
 
   return createTensor(std::move(c));

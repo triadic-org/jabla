@@ -10,7 +10,7 @@ The native matmul kernel lives in `include/jabla.hpp` (`jabla::matmul`, a
 `cblas_sgemm` over the registry buffers), called from `jabla.tensor` as
 `(cpp/jabla.matmul ...)`. It's validated against the pure-jank `matmul-reference`
 oracle (in `test/jabla/test_util.jank`) and C++ doctest cases in
-`cpp/test/tensor_test.cpp`. The bring-up spike (`blas.jank`, element-at-a-time
+`cpp/test/jabla_test.cpp`. The bring-up spike (`blas.jank`, element-at-a-time
 global buffers) is retired now that the registry-native kernel works.
 
 Remaining for the GPU port:
@@ -37,7 +37,7 @@ https://jank-lang.org/blog/2025-07-11-jank-is-cpp/
 cpp/
   README.md        (this file)
   include/         jabla.hpp (tensor backend: registry + ops), doctest.h
-  test/            tensor_test.cpp (doctest; run via `make cpp-test`)
+  test/            jabla_test.cpp (doctest; run via `make cpp-test`)
 ```
 Link flags reach the jank compile/JIT via `JANK_CPP_FLAGS` in the Makefile
 (`-I cpp/include -L <blas-libdir> -lopenblas`), injected before the subcommand on

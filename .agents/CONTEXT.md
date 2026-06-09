@@ -34,7 +34,7 @@ not multiple tapes. Full decision + the staged eager→lazy→fused→backend ro
 - **Step 2 (native matmul via cpp/): COMPLETE (CPU).** `cpp/include/jabla.hpp`
   (`namespace jabla`: a registry of `std::vector<float>` buffers + `matmul` =
   `cblas_sgemm`), called from `jabla.tensor`. Validated vs `matmul-reference` (now
-  in `test/jabla/test_util.jank`) + doctest in `cpp/test/tensor_test.cpp`. The
+  in `test/jabla/test_util.jank`) + doctest in `cpp/test/jabla_test.cpp`. The
   bring-up spike (`blas.jank`, global element-at-a-time buffers) is **retired**.
 - **Step 3 (tensors on native BLAS): IN PROGRESS.** `src/jabla/tensor.jank`:
   tensor = `{:shape :dtype :id}` over the C++ registry (bulk data stays in C++,

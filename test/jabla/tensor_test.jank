@@ -156,23 +156,22 @@
 ;; (test-util). Rectangular (2x3)(3x2) so a transposed/wrong-side rule fails on shape.
 (deftest matmul-vjp-rule
   (testing ":matmul vjp = [dY . Bt, At . dY] vs reference"
-    ;; (let [av [[1.0 2.0 3.0] [4.0 5.0 6.0]]            ; a: 2x3
-    ;;       bv [[5.0 6.0] [7.0 8.0] [9.0 10.0]]         ; b: 3x2
-    ;;       a  (tt/->tensor av)  b (tt/->tensor bv)
-    ;;       y  (tt/matmul a b)                          ; 2x2
-    ;;       dyv [[1.0 1.0] [1.0 1.0]]                   ; upstream grad: 2x2
-    ;;       dy (tt/->tensor dyv)
-    ;;       [da db] ((tt/vjp-rules :matmul) y dy)
-    ;;       exp-da (tu/matmul-reference dyv (tu/transpose-of bv))   ; (2x2)(2x3) -> 2x3
-    ;;       exp-db (tu/matmul-reference (tu/transpose-of av) dyv)   ; (3x2)(2x2) -> 3x2
-    ;;       dav (tt/->vectors da)  dbv (tt/->vectors db)]
-    ;;   (is (= [2 3] (tt/get-shape da)))               ; dA matches a's shape
-    ;;   (is (= [3 2] (tt/get-shape db)))               ; dB matches b's shape
-    ;;   (is (tu/approx? (get-in exp-da [0 0]) (get-in dav [0 0]) 1e-4))
-    ;;   (is (tu/approx? (get-in exp-da [1 2]) (get-in dav [1 2]) 1e-4))
-    ;;   (is (tu/approx? (get-in exp-db [0 0]) (get-in dbv [0 0]) 1e-4))
-    ;;   (is (tu/approx? (get-in exp-db [2 1]) (get-in dbv [2 1]) 1e-4)))
-    (is true)))
+    (let [av [[1.0 2.0 3.0] [4.0 5.0 6.0]]            ; a: 2x3
+          bv [[5.0 6.0] [7.0 8.0] [9.0 10.0]]         ; b: 3x2
+          a  (tt/->tensor av)  b (tt/->tensor bv)
+          y  (tt/matmul a b)                          ; 2x2
+          dyv [[1.0 1.0] [1.0 1.0]]                   ; upstream grad: 2x2
+          dy (tt/->tensor dyv)
+          [da db] ((tt/vjp-rules :matmul) y dy)
+          exp-da (tu/matmul-reference dyv (tu/transpose-of bv))   ; (2x2)(2x3) -> 2x3
+          exp-db (tu/matmul-reference (tu/transpose-of av) dyv)   ; (3x2)(2x2) -> 3x2
+          dav (tt/->vectors da)  dbv (tt/->vectors db)]
+      (is (= [2 3] (tt/get-shape da)))               ; dA matches a's shape
+      (is (= [3 2] (tt/get-shape db)))               ; dB matches b's shape
+      (is (tu/approx? (get-in exp-da [0 0]) (get-in dav [0 0]) 1e-4))
+      (is (tu/approx? (get-in exp-da [1 2]) (get-in dav [1 2]) 1e-4))
+      (is (tu/approx? (get-in exp-db [0 0]) (get-in dbv [0 0]) 1e-4))
+      (is (tu/approx? (get-in exp-db [2 1]) (get-in dbv [2 1]) 1e-4)))))
 
 ;; topo-order: the new piece (the scalar tape got order for free). Don't pin an exact
 ;; order -- many are valid; check the INVARIANT: every node precedes all its :inputs

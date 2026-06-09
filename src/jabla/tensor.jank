@@ -133,16 +133,31 @@
 ;; The forwards now also record their graph node (:op + :inputs); the vjp rules
 ;; that consume those nodes live in the vjp-rules registry below (TODO(you)).
 
+(defn- matmul-raw
+  "Trans-capable matrix product over the registry: op(t1) . op(t2), where op(x) is
+  x or its transpose per transA/transB. Computes via the native cblas_sgemm kernel
+  (cpp/jabla.matmul), which reads the transposed operands in place (CblasTrans) --
+  no materialized transpose. Derives the operation dims m/n/k AND the result shape
+  from the *stored* shapes and the flags (op(t1) is m x k, op(t2) is k x n), so a
+  transposed operand is read correctly. Returns a bare tensor (no :op/:inputs) --
+  this is the raw kernel used both by the matmul forward and by its vjp, so the
+  backward passes don't record graph nodes."
+  [t1 t2 transA transB]
+  (let [[a0 a1] (get-shape t1)
+        [b0 b1] (get-shape t2)
+        m (if transA a1 a0)
+        k (if transA a0 a1)
+        n (if transB b0 b1)
+        t3-id (cpp/jabla.matmul (:id t1) (:id t2) m n k transA transB)]
+    {:shape [m n] :dtype (get-dtype t1) :id t3-id}))
+
 (defn matmul
-  "a (m x k) . b (k x n) -> (m x n). Forward via the native cblas_sgemm kernel
-  (cpp/jabla.matmul), tagged as a :matmul node over [t1 t2]. vjp (in vjp-rules) is
-  two matmuls of the upstream gradient with a and b -- work out the sides/transposes
-  -- routed back through cpp/jabla.matmul."
+  "a (m x k) . b (k x n) -> (m x n), the plain matrix product. The public forward
+  op: a node-free matmul-raw (no transposes) tagged as a :matmul node over [t1 t2].
+  vjp (vjp-rules) is two transposed matmul-raws of the upstream gradient with a and b
+  (dA = grad . Bt, dB = At . grad), routed back through the same kernel via CblasTrans."
   [t1 t2]
-  (let [[m k] (get-shape t1)
-        [_ n] (get-shape t2)
-        t3-id (cpp/jabla.matmul (:id t1) (:id t2) m n k)]
-    {:shape [m n] :dtype (get-dtype t1) :id t3-id :op :matmul :inputs [t1 t2]}))
+  (assoc (matmul-raw t1 t2 false false) :op :matmul :inputs [t1 t2]))
 
 (defn add
   "Elementwise a + b (same shape for now; broadcasting later). Forward via the
@@ -173,11 +188,15 @@
   per entry in (:inputs node), to be accumulated into those inputs. Adjust the
   signature to taste -- it's the seam, not a mandate.
 
-  TODO(you): populate
-    :add    -- pass grad-out straight through to both inputs ([grad-out grad-out]).
-    :matmul -- two matmuls: dA = grad-out . Bt, dB = At . grad-out (sort out the
-               transposes; route through cpp/jabla.matmul, add a transpose helper)."
+  Wired: :add (grad-out straight through to both inputs) and :matmul (dA =
+  grad-out . Bt, dB = At . grad-out, via transposed matmul-raws -- CblasTrans, no
+  materialized transpose). TODO(you): the rest of the GPT op set as each forward lands."
   {:add (fn [_ grad-out] [grad-out grad-out])
+
+   :matmul (fn [node grad-out]
+             (let [[t1 t2] (:inputs node)]
+               [(matmul-raw grad-out t2 false true)    ; dA = grad-out . Bt
+                (matmul-raw t1 grad-out true false)])) ; dB = At . grad-out
    })
 
 (defn seed-gradients
