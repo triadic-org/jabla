@@ -54,7 +54,7 @@ dispatchable multi-backend. The increments back from there, each on that path
 
 | Stage | What | Early simplification (and its later home) |
 |---|---|---|
-| 1 | **Eager backward over the node-on-tensor DAG.** Ops execute eagerly *and* record `:op`/`:inputs`; `backward!` walks reverse-topo from a root, dispatches vjp by `:op`, accumulates per buffer (sum on reuse); rules for `add` (passthrough) + `matmul` (two matmuls + transposes). Validate via tensor finite-diff grad-check + the weight-tying used-twice-sums test. | -- (this is the core engine learning) |
+| 1 | **[DONE 2026-06-09] Eager backward over the node-on-tensor DAG.** Ops execute eagerly *and* record `:op`/`:inputs`; `backward!` walks reverse-topo from a root, dispatches vjp by `:op`, accumulates per buffer (sum on reuse); rules for `add` (passthrough) + `matmul` (two matmuls via CblasTrans). Validated via finite-diff grad-checks (add, matmul, linear-layer) + the weight-tying used-twice-sums test. | -- (this is the core engine learning) |
 | 2 | **Lifetime / arena.** A C++ `freeTensor` / region so backward frees consumed activations (the Neanderthal / ggml discipline; #2). | skip -- `clearTensors` between steps -- until memory bites (-> here) |
 | 3 | **Lazy realize.** Ops stop executing eagerly; they record into the DAG, and `realize` / `->vectors` triggers compute. The seam that unlocks fusion -- the whole reason stage 1 reifies the graph. | eager (-> here) |
 | 4 | **Fusion + scheduling.** Fuse elementwise chains / softmax / attention (this is where the O(seq^2) attention-memory wall below actually gets solved -- flash-attention is a fusion). | -- |

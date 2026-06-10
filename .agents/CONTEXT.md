@@ -27,7 +27,7 @@ foreclosed — PyTorch does them via `detach` + separate optimizers (a future op
 not multiple tapes. Full decision + the staged eager→lazy→fused→backend roadmap:
 `docs/engine-design.md`.
 
-## Current state (June 2026) — Steps 1-2 done, Step 3 (engine, stage 1) in progress
+## Current state (June 2026) — Steps 1-2 done, Step 3 stage 1 (eager autograd) done
 - **Step 1 (scalar reverse-mode autograd): COMPLETE.** `src/jabla/autograd.jank`,
   tape design, green. Tests in `test/jabla/autograd_test.jank`: unit (per-op exact)
   + compositions + numerical `grad-check` + a micrograd oracle anchor.
@@ -36,19 +36,22 @@ not multiple tapes. Full decision + the staged eager→lazy→fused→backend ro
   `cblas_sgemm`), called from `jabla.tensor`. Validated vs `matmul-reference` (now
   in `test/jabla/test_util.jank`) + doctest in `cpp/test/jabla_test.cpp`. The
   bring-up spike (`blas.jank`, global element-at-a-time buffers) is **retired**.
-- **Step 3 (tensors on native BLAS): IN PROGRESS.** `src/jabla/tensor.jank`:
-  tensor = `{:shape :dtype :id}` over the C++ registry (bulk data stays in C++,
-  marshaled only at the edges). `->tensor` / `reshape` (core.matrix-style) /
-  `->vectors` and the **`matmul` + `add` forwards** are done + tested. matmul
-  validated vs `matmul-reference` (square + rectangular); `add` is the elementwise
-  `jabla::add` kernel (no BLAS) + jank wrapper, green in both the C++ doctest and
-  the jank suite. `add` is rank-agnostic (passes the input shape straight through,
-  unlike matmul's 2-D `[m n]`); the buffer accessors are a by-value-sink
-  `createTensor` (move-in) + reference reads from the registry. The forwards now
-  also **record their graph node** (`:op` + `:inputs`; leaves are `:op :leaf`).
-  Remaining (stage 1): `vjp-rules` (`:add` passthrough, `:matmul` two-matmuls +
-  transposes), `backward!` (reverse-topo walk + vjp dispatch + sum-on-reuse), and
-  `grad` -- all scaffolded as contract stubs in `tensor.jank` (bodies are yours).
+- **Step 3 (tensor autograd engine): STAGE 1 COMPLETE (eager).** `src/jabla/tensor.jank`:
+  tensor = `{:shape :dtype :id :op :inputs}` over the C++ registry (bulk data in C++,
+  marshaled only at the edges). All green:
+  - **forwards** `->tensor`/`reshape`/`->vectors`, `matmul` + `add` -- each is a
+    node-free `*-raw` kernel call + `(assoc … :op … :inputs …)`. matmul has CblasTrans
+    flags (the vjp uses them; no materialized transpose). `add` is rank-agnostic.
+  - **vjp-rules** registry: `:add` (grad straight through) + `:matmul` (`dA = dY·Bt`,
+    `dB = At·dY` via transposed `matmul-raw`s).
+  - **eager backward**: `seed-grads` (ones tensor at the root), `topo-order`
+    (post-order DFS, dedup by id, reverse-topo), `backward!` (reduce over the order,
+    dispatch vjp by `:op`, accumulate into inputs **summing on reuse** via `add-raw`),
+    `get-grad` (lookup by id).
+  - **tests** (`tensor_test.jank`): forwards, vjp rules in isolation, topo-order
+    (diamond w/ shared non-leaf), backward smokes (add/chain/weight-tying, exact
+    ones/twos), finite-diff grad-checks (add, matmul, weight-tying, a linear-layer
+    `matmul`+`add` composition). C++ doctests (`jabla_test.cpp`) incl. transposed matmul.
 
 ## C++ interop (settled)
 - All native code in `cpp/include/jabla.hpp` under `namespace jabla`. jank calls
@@ -60,12 +63,16 @@ not multiple tapes. Full decision + the staged eager→lazy→fused→backend ro
   `make check` (= ASCII + lint + cpp-check) runs in the pre-commit hook.
 
 ## Naming convention (settled)
-- **node** = tape entry (`:leaf` | op-result); **value** = the `{:id i}` handle
-  user code holds. ("value" is the accurate scalar term; "tensor" is reserved for
-  Step 3 arrays.)
-- append primitives bang: `push-node!`, `push-leaf!`. readers get-: `get-data`,
-  `get-grad`, `get-node-data`. builders no affix: `add`/`mul`/`pow*`/`relu`/`neg`/
-  `sub`/`div`, `->value` (coercion). lifecycle bang: `reset-tape!`, `backward!`.
+- **Scalar tape (`jabla.autograd`):** `node` = tape entry (`:leaf` | op-result);
+  `value` = the `{:id i}` handle. append primitives bang (`push-node!`/`push-leaf!`);
+  readers get- (`get-data`/`get-grad`/`get-node-data`); builders no affix
+  (`add`/`mul`/`pow*`/…); lifecycle bang (`reset-tape!`/`backward!`).
+- **Tensor engine (`jabla.tensor`):** the tensor map IS the node (node-on-tensor;
+  no separate `value`). Role names for the *same* map: `t`/`t1`/`t2` generic, `node`
+  in the vjp/walk, `root` at backward's entry, `grad`/`grad-out` for gradient tensors.
+  Readers get- (`get-shape`/`get-dtype`/`get-grad`). Node-free kernels suffix `-raw`
+  (`matmul-raw`/`add-raw`); public op = `*-raw` + `(assoc … :op … :inputs …)`. No
+  global tape, so no `reset-tape!`; `backward!` returns the grads map.
 - Comments: one style — `;; --- title ---` + plain `;;` prose (no boxes).
 
 ## Tooling
@@ -78,25 +85,23 @@ not multiple tapes. Full decision + the staged eager→lazy→fused→backend ro
   no `--version` (use `check-health`); no `(catch :default ...)`; don't shadow
   core names you call.
 
-## Next steps (stage 1 -- eager backward over the node-on-tensor DAG)
-Scaffolding is in place (contract stubs in `tensor.jank`; `tu/tensor-grad-check` +
-three RED-but-vacuous deftests in `tensor_test.jank` -- `add-backward`,
-`matmul-backward`, `weight-tying-sums`). The engine logic is the user's to write:
-- [ ] Populate `vjp-rules`: `:add` (pass grad-out through to both inputs), then
-      `:matmul` (`dA = dY . Bt`, `dB = At . dY` -- both back through
-      `cpp/jabla.matmul`). Open sub-decision: transposes from sgemm's `CblasTrans`
-      flag (free) vs a separate transpose op.
-- [ ] Implement `backward!` (seed ones at root; reverse-topo walk via `:inputs`;
-      dispatch vjp by `:op`; accumulate per buffer id, **summing on reuse**) and
-      `grad` (look up by `(:id t)` in the returned grads).
-- [ ] Turn the three deftests green: uncomment bodies, wire `add-backward` first
-      (vjp is trivial -- best for wiring the walk), then `matmul-backward`, then
-      `weight-tying-sums` (the sum-on-reuse correctness gate). Adjust the helper's
-      two API calls if your `backward!`/`grad` signatures differ.
-- [ ] Re-verify on the devbox: `make test` + `make cpp-test`.
-- [ ] (later stages, see `docs/engine-design.md`) arena/free -> lazy realize ->
-      fusion -> backend dispatch; plus a `detach` op for GAN/actor-critic, and the
-      rest of the GPT op set toward one attention block vs PyTorch.
+## Next steps (post stage 1) — two tracks
+See `docs/roadmap.md` (build order) + `docs/engine-design.md` (staged engine roadmap).
+- **Op set toward an attention block (the Step 3 validator).** Each remaining GPT op
+      = forward (records `:op`/`:inputs`, via a `*-raw` kernel) + a vjp rule + tests:
+      mul, relu/gelu, softmax, layernorm, embedding, cross-entropy. Real-learning
+      ones are the **reductions** (softmax, layernorm) + cross-entropy (coupled /
+      non-diagonal vjps); mul/relu/gelu are mechanical copies of the add pattern.
+      Then assemble **one attention block** and validate element-wise vs PyTorch.
+- **Engine stages (perf/scale; slot in as needed).** `arena/free` -- the registry
+      never frees, so a real training loop OOMs; needed before Step 4 training -->
+      lazy realize --> fusion --> backend dispatch (cuBLAS/Metal). Plus a `detach`
+      op for GAN/actor-critic.
+- **Then** Step 4 (full GPT, train TinyShakespeare) and Step 5 (MFU/timing).
+
+> Open question being discussed (2026-06-09): which ops the user implements (the
+> learning ones) vs the assistant (mechanical copies). Leaning: user does the
+> reductions + cross-entropy + one elementwise; assistant does mul/relu/gelu.
 
 > Local-only project notes (full brief, research angle) live in `private/`
 > (gitignored, not published).
