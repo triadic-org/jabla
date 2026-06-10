@@ -173,24 +173,52 @@
       (is (tu/approx? (get-in exp-db [0 0]) (get-in dbv [0 0]) 1e-4))
       (is (tu/approx? (get-in exp-db [2 1]) (get-in dbv [2 1]) 1e-4)))))
 
+;; seed + ones: backward's starting gradient. ones-from-shape is pure (nested 1.0s,
+;; exact =); seed-grads wraps it into a registry-backed TENSOR keyed by the root's id
+;; (the seed must be a tensor -- it's the first grad-out fed to the root's vjp).
+(deftest ones-from-shape-test
+  (testing "ones-from-shape builds nested 1.0s of the given shape"
+    (is (= [1.0 1.0 1.0] (tt/ones-from-shape [3])))
+    (is (= [[1.0 1.0] [1.0 1.0]] (tt/ones-from-shape [2 2])))
+    (is (= [[1.0 1.0 1.0] [1.0 1.0 1.0]] (tt/ones-from-shape [2 3])))))
+
+(deftest seed-grads-test
+  (testing "seed-grads maps the root's id -> a ones tensor of the root's shape"
+    (let [root  (tt/->tensor [[1.0 2.0] [3.0 4.0]])
+          grads (tt/seed-grads root)
+          g     (get grads (:id root))]
+      (is (contains? grads (:id root)))            ; keyed by the root's buffer id
+      (is (= [2 2] (tt/get-shape g)))              ; a TENSOR (has :shape/:id), shaped like root
+      (is (tu/approx? 1.0 (get-in (tt/->vectors g) [0 0]) 1e-6))
+      (is (tu/approx? 1.0 (get-in (tt/->vectors g) [1 1]) 1e-6)))))
+
 ;; topo-order: the new piece (the scalar tape got order for free). Don't pin an exact
 ;; order -- many are valid; check the INVARIANT: every node precedes all its :inputs
 ;; (consumers before producers), and a reused node appears exactly once (dedup by :id).
-;; Needs tt/topo-order public, returning the reachable nodes root-first.
+;; Needs tt/topo-order to take [root] and return the reachable nodes root-first.
+;;
+;; The graph is a DIAMOND with a shared NON-leaf (p), which is what makes this
+;; discriminating: q consumes p, so a correct reverse-topo MUST place q before p.
+;; A reused *leaf* would not catch this -- leaves have no inputs, so their position
+;; never violates the invariant, and a plain breadth-first "append inputs as you
+;; discover them" order (which is NOT a topo sort) would pass. With the shared
+;; non-leaf, BFS puts p before q and the precedes-inputs? check fails.
 (deftest topo-order-invariant
   (testing "reverse-topo: each node precedes its inputs; reused node appears once"
-    ;; (let [a (tt/->tensor [[1.0]])
-    ;;       b (tt/->tensor [[2.0]])
-    ;;       y (tt/add (tt/add a b) a)        ; a fans out (input to inner add AND y)
-    ;;       order (tt/topo-order y)          ; vector of nodes, root first
-    ;;       ids   (mapv :id order)
-    ;;       pos   (zipmap ids (range))       ; :id -> index in order
-    ;;       precedes-inputs? (fn [node]
-    ;;                          (every? (fn [in] (< (pos (:id node)) (pos (:id in))))
-    ;;                                  (:inputs node)))]
-    ;;   (is (= (count ids) (count (set ids))))   ; no node twice (a deduped)
-    ;;   (is (every? precedes-inputs? order)))    ; every edge points "later" in order
-    (is true)))
+    (let [a (tt/->tensor [[1.0 2.0] [3.0 4.0]])
+          b (tt/->tensor [[5.0 6.0] [7.0 8.0]])
+          p (tt/add a b)                   ; shared non-leaf
+          q (tt/add p a)                   ; q consumes p  -> q must precede p
+          y (tt/add p q)                   ; root consumes p and q
+          order (tt/topo-order y)          ; vector of nodes, root first
+          ids   (mapv :id order)
+          pos   (zipmap ids (range))       ; :id -> index in order
+          precedes-inputs? (fn [node]
+                             (every? (fn [in] (< (pos (:id node)) (pos (:id in))))
+                                     (:inputs node)))]
+      (is (= 5 (count order)))                 ; a b p q y, each once (p, a deduped)
+      (is (= (count ids) (count (set ids))))   ; no node twice
+      (is (every? precedes-inputs? order)))))  ; every edge points "later" in order
 
 ;; --- Stage 1 integration (whole backward via grad-check) --------------------
 

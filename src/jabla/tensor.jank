@@ -199,9 +199,48 @@
                 (matmul-raw t1 grad-out true false)])) ; dB = At . grad-out
    })
 
-(defn seed-gradients
-  [_root]
-  )
+(defn ones-from-shape
+  "Nested vector of 1.0s for a row-major `shape` -- the pre-tensor (jank-edge) form
+  of a ones array, mirroring reshape. [2 3] -> [[1.0 1.0 1.0] [1.0 1.0 1.0]];
+  [] -> 1.0 (the recursion base). ->tensor it to get a registry-backed ones tensor."
+  [shape]
+  (if (seq shape)
+    (let [[n & sub] shape]
+      (vec (repeat n (ones-from-shape sub))))
+    1.0))
+
+(defn seed-grads
+  "Initial gradient map for a backward pass from `root`: {(:id root) <ones tensor of
+  root's shape>}. The seed is all-ones because the objective is sum(root), so
+  d(sum root)/d(root) = 1 everywhere -- which is exactly what the finite-difference
+  grad-check compares against. The value is a TENSOR (registry-backed), like every
+  grad the vjp rules produce and consume, so it flows straight into a vjp rule."
+  [root]
+  {(:id root) (->tensor (ones-from-shape (:shape root)))})
+
+(defn append-uniq
+  "DFS post-order visit step, folded over a node's inputs via reduce. `acc` is
+  {:seen <set of ids>, :order <node list>}. If `node` is unseen, mark its :id,
+  recurse into its :inputs FIRST, then prepend `node` to :order -- so every input
+  lands ahead of the node that consumes it. Dedup is by :id (each buffer once).
+  :order is a list, so conj prepends: emitting post-order leaves the root at the
+  head, i.e. reverse-topological. The visit step behind topo-order."
+  [{:keys [seen] :as acc}, node]
+  (let [node-id (:id node)]
+    (if (contains? seen node-id)
+    acc ;; return original if already seen
+    (-> acc
+        (update :seen conj node-id) ;; mark as seen before recursion
+        (as-> x (reduce append-uniq x (:inputs node)))
+        (update :order conj node)))))
+
+(defn topo-order
+  "Reachable nodes of the DAG rooted at `root`, reverse-topological (root first):
+  every node precedes all of its :inputs, and each node appears once (dedup by :id).
+  This is the order backward! walks -- a node's gradient is fully accumulated before
+  its vjp pushes into its inputs. Post-order DFS via append-uniq."
+  [root]
+  (vec (:order (append-uniq {:seen #{} :order '()} root))))
 
 (defn backward!
   "Reverse-mode backward over the node-on-tensor DAG rooted at `root`.
@@ -216,7 +255,7 @@
     - return the accumulated gradients (keyed so `grad` can find them by tensor).
   No global state -- the returned grads ARE the result (collapse to a stored form
   later if you prefer). TODO(you)."
-  [_root]
+  [_]
   (throw (ex-info "not implemented" {})))
 
 (defn grad
