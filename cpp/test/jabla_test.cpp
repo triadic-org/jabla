@@ -167,3 +167,41 @@ TEST_CASE("geluBackward = dy * gelu'(x); gelu'(0) = 0.5") {
   REQUIRE(v.size() == 1);
   CHECK(v[0] == doctest::Approx(1.0f));    // 2.0 * gelu'(0)=0.5
 }
+
+// --- relu (elementwise max(0, x)) + its backward ----------------------------
+// Contract: relu(xId) applies max(0, x) elementwise, stores a NEW registry tensor,
+// returns its id. reluBackward(xId, dyId) is the vjp -- dx = dy * (x > 0), the
+// subgradient with the kink mapped to 0 (relu'(0) := 0; the jank grad-check keeps
+// zeros out of its inputs so this choice never shows up there).
+TEST_CASE("relu: max(0, x) elementwise, including negatives and zero") {
+  clearTensors();
+  int x = createTensor({-1.0f, 2.0f, 0.0f, 3.0f});
+  auto v = getTensor(relu(x));
+  REQUIRE(v.size() == 4);
+  CHECK(v[0] == doctest::Approx(0.0f));    // negative clamps to 0
+  CHECK(v[1] == doctest::Approx(2.0f));    // positive passes through
+  CHECK(v[2] == doctest::Approx(0.0f));    // zero stays 0
+  CHECK(v[3] == doctest::Approx(3.0f));
+}
+
+TEST_CASE("relu leaves its input untouched (no aliasing)") {
+  clearTensors();
+  int x = createTensor({-1.0f, 2.0f, 0.0f, 3.0f});
+  relu(x);
+  CHECK(getTensor(x) == std::vector<float>{-1.0f, 2.0f, 0.0f, 3.0f});
+}
+
+// Uncomment once reluBackward(xId, dyId) lands. dx = dy * (x > 0): the gradient
+// passes through where x is positive and is killed where x is negative; at x = 0
+// the subgradient is 0 (relu'(0) := 0).
+TEST_CASE("reluBackward = dy * (x > 0); kink at 0 maps to 0") {
+  clearTensors();
+  int x  = createTensor({-1.0f, 2.0f, 0.0f, 3.0f});
+  int dy = createTensor({10.0f, 10.0f, 10.0f, 10.0f});
+  auto v = getTensor(reluBackward(x, dy));
+  REQUIRE(v.size() == 4);
+  CHECK(v[0] == doctest::Approx(0.0f));     // x<0 -> grad killed
+  CHECK(v[1] == doctest::Approx(10.0f));    // x>0 -> grad passes
+  CHECK(v[2] == doctest::Approx(0.0f));     // x=0 -> relu'(0):=0
+  CHECK(v[3] == doctest::Approx(10.0f));
+}

@@ -132,6 +132,11 @@
 ;; The forwards record their graph node (:op + :inputs); the vjp rules that consume
 ;; those nodes live in the vjp-rules registry below (:add + :matmul wired).
 
+(defn ->node
+  "Turns a raw tensor into a graph node for backward!"
+  [raw op inputs]
+  (assoc raw :op op :inputs inputs))
+
 (defn- matmul-raw
   "Trans-capable matrix product over the registry: op(t1) . op(t2), where op(x) is
   x or its transpose per transA/transB. Computes via the native cblas_sgemm kernel
@@ -156,7 +161,7 @@
   vjp (vjp-rules) is two transposed matmul-raws of the upstream gradient with a and b
   (dA = grad . Bt, dB = At . grad), routed back through the same kernel via CblasTrans."
   [t1 t2]
-  (assoc (matmul-raw t1 t2 false false) :op :matmul :inputs [t1 t2]))
+  (->node (matmul-raw t1 t2 false false) :matmul [t1 t2]))
 
 (defn add-raw
   "Elementwise a + b (same shape for now; broadcasting later) via the native
@@ -172,7 +177,7 @@
   node over [t1 t2]. vjp (vjp-rules) passes the gradient straight through to both
   inputs (with broadcasting, later, sum it back down to each input's shape)."
   [t1 t2]
-  (assoc (add-raw t1 t2) :op :add :inputs [t1 t2]))
+  (->node (add-raw t1 t2) :add [t1 t2]))
 
 (defn- mul-raw
   "Elementwise a * b (Hadamard product), same shape, via cpp/jabla.mul. Bare tensor
@@ -184,7 +189,7 @@
   "Elementwise a * b (Hadamard product -- NOT matmul). Public forward op tagged :mul
   over [t1 t2]. vjp: dA = grad * b, dB = grad * a (each an elementwise mul-raw)."
   [t1 t2]
-  (assoc (mul-raw t1 t2) :op :mul :inputs [t1 t2]))
+  (->node (mul-raw t1 t2) :mul [t1 t2]))
 
 (defn- gelu-raw
   "GELU activation (tanh approximation, matching nanoGPT new_gelu / llm.c) via
@@ -202,7 +207,20 @@
   "GELU activation (tanh approximation), the public forward op tagged :gelu over [t].
   vjp: dx = grad-out * gelu'(x) via the fused geluBackward kernel."
   [t]
-  (assoc (gelu-raw t) :op :gelu :inputs [t]))
+  (->node (gelu-raw t) :gelu [t]))
+
+(defn- relu-raw
+  [t]
+  {:shape (get-shape t) :dtype (get-dtype t) :id (cpp/jabla.relu (:id t))})
+
+(defn relu
+  [t]
+  (->node (relu-raw t) :relu [t]))
+
+(defn relu-backward-raw
+  [x grad-out]
+  {:shape (get-shape x) :dtype (get-dtype x)
+   :id (cpp/jabla.reluBackward (:id x) (:id grad-out))})
 
 ;; TODO(you): the remaining GPT op set, each = forward (records its node) + a vjp
 ;; rule, validated vs PyTorch: relu, softmax, layernorm, embedding, cross-entropy.
@@ -242,6 +260,10 @@
    :gelu (fn [node grad-out]
            (let [[x] (:inputs node)]
              [(gelu-backward-raw x grad-out)]))  ; dx = grad-out * gelu'(x)
+
+   :relu (fn [node grad-out]
+           (let [[x] (:inputs node)]
+             [(relu-backward-raw x grad-out)]))  ; dx = grad-out * relu'(x)
    })
 
 (defn ones-from-shape

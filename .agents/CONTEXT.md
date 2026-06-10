@@ -85,23 +85,32 @@ not multiple tapes. Full decision + the staged eager→lazy→fused→backend ro
   no `--version` (use `check-health`); no `(catch :default ...)`; don't shadow
   core names you call.
 
-## Next steps (post stage 1) — two tracks
-See `docs/roadmap.md` (build order) + `docs/engine-design.md` (staged engine roadmap).
-- **Op set toward an attention block (the Step 3 validator).** Each remaining GPT op
-      = forward (records `:op`/`:inputs`, via a `*-raw` kernel) + a vjp rule + tests:
-      mul, relu/gelu, softmax, layernorm, embedding, cross-entropy. Real-learning
-      ones are the **reductions** (softmax, layernorm) + cross-entropy (coupled /
-      non-diagonal vjps); mul/relu/gelu are mechanical copies of the add pattern.
-      Then assemble **one attention block** and validate element-wise vs PyTorch.
-- **Engine stages (perf/scale; slot in as needed).** `arena/free` -- the registry
-      never frees, so a real training loop OOMs; needed before Step 4 training -->
-      lazy realize --> fusion --> backend dispatch (cuBLAS/Metal). Plus a `detach`
-      op for GAN/actor-critic.
-- **Then** Step 4 (full GPT, train TinyShakespeare) and Step 5 (MFU/timing).
+## Op set progress (the Step 3 op track)
+Each op = forward (records `:op`/`:inputs` via a `*-raw` kernel) + a vjp rule + tests.
+Split settled: assistant does the mechanical copies, user does the learning ones.
+- **Done (assistant): `mul`, `gelu`.** Elementwise; C++ kernels (`mul`, `gelu` tanh
+  approx + fused `geluBackward`) + jank forwards + `:mul`/`:gelu` vjp rules + tests.
+  cpp-test verified locally; jank grad-checks green on devbox.
+- **In progress (user): `relu`, `softmax`, `layernorm`, `cross-entropy`, `embedding`.**
+  Test targets are **scaffolded** in `tensor_test.jank` (commented, uncomment-as-you-go)
+  with forward reference values, vjp shapes, and the gotchas baked in -- notably: the
+  softmax/layernorm grad-check is VACUOUS under plain `sum` (rows sum to 1 / to beta) ->
+  weight the output (`(mul (softmax x) C)`); relu non-diff at 0; embedding indices
+  aren't differentiable (hand-oracle the scatter-add). Suggested order: relu -> softmax
+  -> cross-entropy -> layernorm -> embedding.
+- **Then** assemble **one attention block** + validate element-wise vs PyTorch (the
+  Step 3 row's validator). Watch for batched/N-D matmul (attention) -- its vjp differs
+  from the 2-D rule.
 
-> Open question being discussed (2026-06-09): which ops the user implements (the
-> learning ones) vs the assistant (mechanical copies). Leaning: user does the
-> reductions + cross-entropy + one elementwise; assistant does mul/relu/gelu.
+## Other tracks / open threads
+- **Engine stages (perf/scale; see `engine-design.md`):** `arena/free` (registry never
+  frees -> a training loop OOMs; needed before Step 4) -> lazy realize -> fusion ->
+  backend dispatch (cuBLAS/Metal). Plus a `detach` op for GAN/actor-critic.
+- **Decided this session:** keep `autograd.jank` (Step-1 scalar reference, not dead
+  code); defer splitting `tensor.jank` / `jabla.hpp` (engine vs ops/kernels) until
+  softmax+layernorm land and the boundary is clear; the `*-raw` -> public-op wrapper
+  could become a `defop` macro later (function `as-node` is the 80% if wanted now).
+- **Then** Step 4 (full GPT, train TinyShakespeare) and Step 5 (MFU/timing).
 
 > Local-only project notes (full brief, research angle) live in `private/`
 > (gitignored, not published).

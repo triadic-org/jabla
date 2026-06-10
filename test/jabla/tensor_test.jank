@@ -350,17 +350,15 @@
 ;; at x=0 -- keep 0 out of the grad-check inputs (a finite diff across the kink is wrong).
 (deftest relu-forward
   (testing "relu = max(0, x)"
-    ;; (let [c (tt/->vectors (tt/relu (tt/->tensor [[-1.0 2.0] [0.0 3.0]])))]
-    ;;   (is (tu/approx? 0.0 (get-in c [0 0]) 1e-6))
-    ;;   (is (tu/approx? 2.0 (get-in c [0 1]) 1e-6))
-    ;;   (is (tu/approx? 3.0 (get-in c [1 1]) 1e-6)))
-    (is true)))
+    (let [c (tt/->vectors (tt/relu (tt/->tensor [[-1.0 2.0] [0.0 3.0]])))]
+      (is (tu/approx? 0.0 (get-in c [0 0]) 1e-6))
+      (is (tu/approx? 2.0 (get-in c [0 1]) 1e-6))
+      (is (tu/approx? 3.0 (get-in c [1 1]) 1e-6)))))
 
 (deftest relu-backward
   (testing "relu gradients vs finite differences (inputs away from 0)"
-    ;; (is (tu/tensor-grad-check (fn [[x]] (tt/relu x))
-    ;;                           [[[0.5 -0.5] [1.5 -2.0]]]))   ; no zeros
-    (is true)))
+    (is (tu/tensor-grad-check (fn [[x]] (tt/relu x))
+                              [[[0.5 -0.5] [1.5 -2.0]]]))))   ; no zeros
 
 ;; softmax: row-wise exp(x - rowmax) / sum (subtract the row max -- same result, avoids
 ;; overflow). The first COUPLED vjp (a row's outputs all depend on each other): with
