@@ -1,0 +1,32 @@
+(ns jabla.schema-test
+  (:require [clojure.test :refer [deftest is testing]]
+            [jabla.schema :as s]))
+
+;; Tests for the hand-rolled runtime schema (jabla.schema). Doubles as executable
+;; documentation of what a well-formed tensor is and which shape pairings are legal.
+
+(def ok {:shape [2 3] :dtype :f32 :id 0 :op :leaf :inputs []})
+
+(deftest tensor-structural
+  (testing "a well-formed tensor passes; explain-tensor is nil"
+    (is (s/tensor? ok))
+    (is (nil? (s/explain-tensor ok))))
+  (testing "malformed tensors fail, and explain names the problem"
+    (is (not (s/tensor? (assoc ok :dtype :f64))))   ; unknown dtype
+    (is (not (s/tensor? (assoc ok :shape []))))     ; rank-0 unsupported
+    (is (not (s/tensor? (dissoc ok :id))))          ; missing handle
+    (is (not (s/tensor? (assoc ok :op :bogus))))    ; unknown op
+    (is (seq (s/explain-tensor (assoc ok :dtype :f64))))))
+
+(deftest check-passes-valid
+  (testing "check returns a valid tensor unchanged (failure path covered by explain)"
+    (is (= ok (s/check ok)))))
+
+(deftest shape-compat
+  (testing "same-shape? -- the elementwise (add/mul) precondition"
+    (is (s/same-shape? ok ok))
+    (is (not (s/same-shape? ok (assoc ok :shape [3 2])))))
+  (testing "matmul-compatible? -- inner dims of (m x k)(k x n) must match"
+    (let [a {:shape [2 3]} b {:shape [3 4]} bad {:shape [2 4]}]
+      (is (s/matmul-compatible? a b))              ; k = 3 lines up
+      (is (not (s/matmul-compatible? a bad))))))   ; 3 != 2

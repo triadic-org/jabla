@@ -1,0 +1,127 @@
+(ns jabla.schema)
+
+;; ============================================================================
+;; Runtime schema + validation for jabla.tensor values -- the pragmatic, zero-dep
+;; answer to the three goals of the typing spike: schema validation, helping a
+;; reader reason about what each step expects, and catching malformed tensors
+;; early (before a bad shape segfaults a C++ kernel).
+;;
+;; Pure jank -- only bedrock clojure.core (maps, predicates) -- so it loads with
+;; NO dependency risk, unlike malli / clojure.spec / core.typed (see
+;; docs/typing-spike.md for the why and the devbox loadability probe).
+;;
+;; Two kinds of check, because they catch different bugs:
+;;   - STRUCTURAL (tensor?)            -- is this a well-formed tensor map?
+;;   - SHAPE      (same-shape? /        -- do these tensors' shapes line up for the
+;;                 matmul-compatible?)     op? The dependent-shape checks a generic
+;;                                         schema can't express ("matmul's k dims
+;;                                         must match"), and the class of bug that
+;;                                         actually hurts.
+;;
+;; Use at op boundaries: a `:pre` for a cheap assert, or `check` for a thrown
+;; explanation. Validation is OPT-IN -- keep it on at the API edges + while
+;; bringing an op up; it can be compiled out / flagged off on the hot path later.
+;; ============================================================================
+
+;; --- Vocabulary (grows with the system) -------------------------------------
+
+(def dtypes
+  "Allowed :dtype values. Grows with the storage refactor (bf16 / fp16)."
+  #{:f32})
+
+(def ops
+  "Allowed :op tags: :leaf, or the op that produced the tensor. Grows with the
+  op set (add :relu / :softmax / ... as they land)."
+  #{:leaf :matmul :add :mul :gelu})
+
+;; --- Structural schema (the shape of a tensor MAP) --------------------------
+
+(defn shape?
+  "A valid :shape -- a non-empty vector of positive dimension sizes. Tensors are
+  rank >= 1 here (rank-0 scalars are intentionally unsupported; see tensor/reshape)."
+  [s]
+  (and (vector? s) (seq s) (every? pos? s)))
+
+(defn tensor?
+  "True iff t is a structurally well-formed tensor map:
+    {:shape <shape?> :dtype <known> :id <present> :op <known> :inputs <vector>}.
+  Shallow on :inputs (checks it is a vector; deep DAG validation would recurse)."
+  [t]
+  (and (map? t)
+       (shape? (:shape t))
+       (contains? dtypes (:dtype t))
+       (not (nil? (:id t)))
+       (contains? ops (:op t))
+       (vector? (:inputs t))))
+
+(defn- problems
+  "Vector of human-readable problems with t (empty if valid) -- the 'why is this
+  malformed' a thrown error or a REPL inspection wants. This IS the schema,
+  written as checks; reading it tells you exactly what a tensor must be."
+  [t]
+  (if-not (map? t)
+    ["not a map"]
+    (->> [(when-not (shape? (:shape t))
+            (str ":shape must be a non-empty vector of positive dims, got "
+                 (str (:shape t))))
+          (when-not (contains? dtypes (:dtype t))
+            (str ":dtype must be one of " (str dtypes) ", got " (str (:dtype t))))
+          (when (nil? (:id t))
+            ":id is missing (the C++ registry handle)")
+          (when-not (contains? ops (:op t))
+            (str ":op must be one of " (str ops) ", got " (str (:op t))))
+          (when-not (vector? (:inputs t))
+            (str ":inputs must be a vector of input tensors, got " (str (:inputs t))))]
+         (remove nil?)
+         vec)))
+
+(defn- join-problems
+  [ps]
+  (reduce (fn [acc p] (if (= "" acc) p (str acc "; " p))) "" ps))
+
+(defn explain-tensor
+  "nil if t is a valid tensor, else a vector of problem strings. Pure -- safe to
+  call in a REPL to inspect a suspect value without throwing."
+  [t]
+  (let [ps (problems t)]
+    (if (seq ps) ps nil)))
+
+(defn check
+  "Return t if it is a valid tensor, else throw ex-info naming the specific
+  problems. Use at a boundary where you want a clear failure instead of a
+  downstream segfault. Example: (defn matmul [a b] (check a) (check b) ...)."
+  [t]
+  (let [ps (problems t)]
+    (if (seq ps)
+      (throw (ex-info (str "invalid tensor: " (join-problems ps))
+                      {:tensor t :problems ps}))
+      t)))
+
+;; --- Shape compatibility (the dependent-shape checks that catch real bugs) ---
+
+(defn same-shape?
+  "True iff a and b have identical shapes -- the precondition for the elementwise
+  ops (add / mul / ...). (Once broadcasting lands, this relaxes to broadcastable?.)"
+  [a b]
+  (= (:shape a) (:shape b)))
+
+(defn matmul-compatible?
+  "True iff a (m x k) and b (k x n) can be multiplied: both rank-2 and a's inner
+  dim equals b's inner dim. This is the check that would have caught a transposed
+  operand or a wrong reshape before cblas read past a buffer."
+  [a b]
+  (and (= 2 (count (:shape a)))
+       (= 2 (count (:shape b)))
+       (= (second (:shape a)) (first (:shape b)))))
+
+;; --- How to use it at a boundary (copy into an op) --------------------------
+;; A :pre assert (cheap, throws AssertionError on violation):
+;;   (defn matmul [t1 t2]
+;;     {:pre [(tensor? t1) (tensor? t2) (matmul-compatible? t1 t2)]}
+;;     ...)
+;; Or `check` for a message that names the problem (better while bringing an op up):
+;;   (defn add [t1 t2]
+;;     (check t1) (check t2)
+;;     (when-not (same-shape? t1 t2)
+;;       (throw (ex-info "add: shapes differ" {:a (:shape t1) :b (:shape t2)})))
+;;     ...)
