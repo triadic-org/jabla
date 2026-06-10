@@ -280,10 +280,9 @@
 ;; rectangular shapes catch transpose/leading-dim mistakes the square case hides.
 (deftest matmul-backward
   (testing "matmul gradients vs finite differences"
-    ;; (is (tu/tensor-grad-check (fn [[a b]] (tt/matmul a b))
-    ;;                           [[[1.0 2.0 3.0] [4.0 5.0 6.0]]      ; 2x3
-    ;;                            [[5.0 6.0] [7.0 8.0] [9.0 10.0]]])) ; 3x2
-    (is true)))
+    (is (tu/tensor-grad-check (fn [[a b]] (tt/matmul a b))
+                              [[[1.0 2.0 3.0] [4.0 5.0 6.0]]      ; 2x3
+                               [[5.0 6.0] [7.0 8.0] [9.0 10.0]]])))) ; 3x2
 
 ;; Weight-tying correctness gate (engine-design.md #5): one tensor used in two
 ;; places must have its two upstream gradients SUMMED, not overwritten. GPT ties the
@@ -292,9 +291,20 @@
 ;; grad-check's finite difference will only agree if backward sums.
 (deftest weight-tying-sums
   (testing "a tensor used twice accumulates (sums) its gradients"
-    ;; (is (tu/tensor-grad-check (fn [[a]] (tt/add a a))
-    ;;                           [[[1.0 2.0] [3.0 4.0]]]))
-    (is true)))
+    (is (tu/tensor-grad-check (fn [[a]] (tt/add a a))
+                              [[[1.0 2.0] [3.0 4.0]]]))))
+
+;; Composition: a linear layer y = x.W + b -- the building block of every GPT layer,
+;; and the first grad-check with MIXED ops. backward has to thread the upstream grad
+;; through the add vjp into [x.W, b], then through the matmul vjp into [x, W]; topo-order
+;; sequences the two ops. Grads for all three inputs checked vs finite differences.
+(deftest linear-layer-backward
+  (testing "y = x.W + b gradients vs finite differences (matmul then add)"
+    (is (tu/tensor-grad-check
+         (fn [[x w b]] (tt/add (tt/matmul x w) b))
+         [[[1.0 2.0 3.0] [4.0 5.0 6.0]]        ; x : 2x3
+          [[0.1 0.2] [0.3 0.4] [0.5 0.6]]      ; W : 3x2  -> x.W is 2x2
+          [[0.5 0.5] [0.5 0.5]]]))))           ; b : 2x2
 
 ;; --- Stage 5+ (later stages): GPT op set (mul, relu/gelu, softmax, layernorm,
 ;; embedding, cross-entropy) + a detach op (GAN / actor-critic), then one attention
