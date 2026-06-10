@@ -337,7 +337,120 @@
     (is (tu/tensor-grad-check (fn [[x]] (tt/gelu x))
                               [[[0.5 -0.5] [1.5 -2.0]]]))))
 
-;; --- Stage 5+ (later): the rest of the op set (relu, softmax, layernorm, embedding,
-;; cross-entropy) + a detach op (GAN / actor-critic), then one attention block element-
-;; wise vs PyTorch. Add deftests here as each op + its vjp lands. The lazy-realize /
-;; fusion / backend stages are tracked in docs/engine-design.md.
+;; --- Op set: ops you'll implement (relu, softmax, layernorm, cross-entropy, embedding)
+;; Each = a C++ kernel + a jank forward (records :op/:inputs via a *-raw) + a vjp rule +
+;; these tests, uncommented as you go. Suggested order: relu (warmup) -> softmax (the
+;; coupled reduction) -> cross-entropy (uses softmax) -> layernorm -> embedding.
+;; Two gotchas below are worth reading BEFORE you start: the softmax grad-check note
+;; (applies to layernorm too) and the embedding one.
+
+;; relu: elementwise max(0, x). vjp: dx = grad * (x > 0). Same shape as gelu (an
+;; input-dependent elementwise mask) -- low marginal learning after gelu, but quick.
+;; C++: a relu kernel + reluBackward (dy * (x>0)). GOTCHA: relu is non-differentiable
+;; at x=0 -- keep 0 out of the grad-check inputs (a finite diff across the kink is wrong).
+(deftest relu-forward
+  (testing "relu = max(0, x)"
+    ;; (let [c (tt/->vectors (tt/relu (tt/->tensor [[-1.0 2.0] [0.0 3.0]])))]
+    ;;   (is (tu/approx? 0.0 (get-in c [0 0]) 1e-6))
+    ;;   (is (tu/approx? 2.0 (get-in c [0 1]) 1e-6))
+    ;;   (is (tu/approx? 3.0 (get-in c [1 1]) 1e-6)))
+    (is true)))
+
+(deftest relu-backward
+  (testing "relu gradients vs finite differences (inputs away from 0)"
+    ;; (is (tu/tensor-grad-check (fn [[x]] (tt/relu x))
+    ;;                           [[[0.5 -0.5] [1.5 -2.0]]]))   ; no zeros
+    (is true)))
+
+;; softmax: row-wise exp(x - rowmax) / sum (subtract the row max -- same result, avoids
+;; overflow). The first COUPLED vjp (a row's outputs all depend on each other): with
+;; s = softmax(x),   dx_i = s_i (dy_i - sum_j dy_j s_j)   [dx = s * (dy - rowdot)].
+;; C++: a softmax kernel + softmaxBackward (it's a row reduction too -- needs s and dy).
+;;
+;; GRAD-CHECK GOTCHA (reductions): tensor-grad-check uses sum(output) as the objective.
+;; But each softmax row SUMS TO 1, so sum(softmax(x)) is constant (= #rows) -> gradient
+;; is ZERO everywhere -> the check passes VACUOUSLY (0 == 0) and tests nothing. Fix:
+;; weight the output by a fixed non-uniform tensor before summing -- build = (mul
+;; (softmax x) C). Then d(sum(s*C))/dx is non-zero and the check is real. (Layernorm
+;; has the same trap.)
+(deftest softmax-forward
+  (testing "softmax: row sums to 1; reference softmax([1,2,3]) = [.0900 .2447 .6652]"
+    ;; (let [c (tt/->vectors (tt/softmax (tt/->tensor [[1.0 2.0 3.0]])))]
+    ;;   (is (tu/approx? 1.0    (+ (get-in c [0 0]) (get-in c [0 1]) (get-in c [0 2])) 1e-5))
+    ;;   (is (tu/approx? 0.0900 (get-in c [0 0]) 1e-3))
+    ;;   (is (tu/approx? 0.2447 (get-in c [0 1]) 1e-3))
+    ;;   (is (tu/approx? 0.6652 (get-in c [0 2]) 1e-3)))
+    (is true)))
+
+(deftest softmax-backward
+  (testing "softmax gradients vs finite differences (weighted-sum objective -- see note)"
+    ;; (let [c (tt/->tensor [[0.3 0.5 0.2] [0.1 0.8 0.6]])]   ; fixed non-uniform weights
+    ;;   (is (tu/tensor-grad-check (fn [[x]] (tt/mul (tt/softmax x) c))
+    ;;                             [[[1.0 2.0 3.0] [0.5 1.5 2.5]]])))
+    (is true)))
+
+;; cross-entropy: the loss. CE(logits, target) = -log(softmax(logits)[target]), averaged
+;; over N rows. Output is a SCALAR. vjp (the clean fused form): dlogits =
+;; (softmax(logits) - onehot(target)) / N. Targets are INTEGER indices (non-diff). Often
+;; fused with softmax for stability. Depends on softmax -- do that first. No grad-check
+;; gotcha: the output is already a scalar loss, so sum(output) is non-trivial in logits.
+(deftest cross-entropy-forward
+  (testing "CE([[1 2 3]], target 2) = -log(softmax[2]) ~ -log(0.6652) ~ 0.4076"
+    ;; (is (tu/approx? 0.4076 (tu/tensor-sum (tt/cross-entropy (tt/->tensor [[1.0 2.0 3.0]])
+    ;;                                                          [2])) 1e-3))
+    (is true)))
+
+(deftest cross-entropy-backward
+  (testing "cross-entropy gradients vs finite differences (logits only)"
+    ;; (is (tu/tensor-grad-check (fn [[logits]] (tt/cross-entropy logits [2]))
+    ;;                           [[[1.0 2.0 3.0]]]))
+    (is true)))
+
+;; layernorm: per row, normalize then affine. mu = mean(x), var = mean((x-mu)^2)
+;; (population, 1/N -- matches PyTorch), norm = (x - mu)/sqrt(var + eps), out =
+;; gamma*norm + beta (gamma/beta per-feature params). The famously fiddly vjp: the
+;; x-gradient couples through mu and var (a reduction); gamma/beta grads are simpler
+;; reductions. Inputs [x gamma beta]. C++: a layernorm kernel (save mu/rstd for
+;; backward) + layernormBackward. Same weighted-sum grad-check gotcha as softmax.
+(deftest layernorm-forward
+  (testing "layernorm([1,2,3], g=1, b=0): ~0 mean, normalized = [-1.2247 0 1.2247]"
+    ;; (let [g (tt/->tensor [[1.0 1.0 1.0]]) b (tt/->tensor [[0.0 0.0 0.0]])
+    ;;       c (tt/->vectors (tt/layernorm (tt/->tensor [[1.0 2.0 3.0]]) g b))]
+    ;;   (is (tu/approx? 0.0 (+ (get-in c [0 0]) (get-in c [0 1]) (get-in c [0 2])) 1e-5))
+    ;;   (is (tu/approx? -1.2247 (get-in c [0 0]) 1e-3))
+    ;;   (is (tu/approx?  1.2247 (get-in c [0 2]) 1e-3)))
+    (is true)))
+
+(deftest layernorm-backward
+  (testing "layernorm gradients vs finite differences (weighted-sum; checks x/gamma/beta)"
+    ;; (let [w (tt/->tensor [[0.3 0.5 0.2]])]
+    ;;   (is (tu/tensor-grad-check
+    ;;        (fn [[x g b]] (tt/mul (tt/layernorm x g b) w))
+    ;;        [[[1.0 2.0 3.0]]      ; x
+    ;;         [[1.0 1.0 1.0]]      ; gamma
+    ;;         [[0.0 0.0 0.0]]])))  ; beta
+    (is true)))
+
+;; embedding: gather rows of a weight matrix W (vocab x dim) by integer indices.
+;; forward: out[i] = W[idx[i]]. vjp: SCATTER-ADD -- dW[idx[i]] += dY[i], ACCUMULATING
+;; when an index repeats (same sum-on-reuse idea as weight-tying). Indices are NOT
+;; differentiable; only W gets a gradient. C++: a gather kernel + a scatter-add backward.
+;; GOTCHA: this doesn't fit tensor-grad-check (the helper perturbs every input as floats,
+;; but idx are ints). Check dW directly with a hand oracle instead.
+(deftest embedding-forward
+  (testing "embedding gathers W rows by index"
+    ;; (let [w (tt/->tensor [[1.0 2.0] [3.0 4.0] [5.0 6.0]])   ; vocab 3, dim 2
+    ;;       c (tt/->vectors (tt/embedding w [2 0]))]          ; rows 2 then 0
+    ;;   (is (= [[5.0 6.0] [1.0 2.0]] c)))
+    (is true)))
+
+(deftest embedding-backward
+  (testing "embedding scatter-add: dW accumulates dY into used rows (repeats sum)"
+    ;; Hand oracle (not tensor-grad-check): idx [0 0 1], dY all-ones (3 rows x 2 cols) ->
+    ;; dW row 0 = [2 2] (index 0 used twice), row 1 = [1 1], row 2 = [0 0]. Build the
+    ;; embedding, backward! from a sum, read (tt/get-grad grads w), compare to that.
+    (is true)))
+
+;; --- Stage 5+ (later): a detach op (GAN / actor-critic), then assemble one attention
+;; block element-wise vs PyTorch (the Step 3 validator). The lazy-realize / fusion /
+;; backend stages are tracked in docs/engine-design.md.
