@@ -220,6 +220,51 @@
       (is (= (count ids) (count (set ids))))   ; no node twice
       (is (every? precedes-inputs? order)))))  ; every edge points "later" in order
 
+;; --- backward! smokes (exact values; debug these before the grad-checks) ----
+;; These exercise the whole backward! machinery (seed -> topo-order -> vjp dispatch
+;; -> accumulate -> grad) but assert EXACT gradients (ones / twos) instead of finite
+;; differences, so a failure is unambiguous and easy to read. Wire backward! + grad
+;; against these first; then the finite-diff grad-checks below. They assume the
+;; stage-1 API: (backward! root) returns the grads, (grad grads t) reads one out.
+
+;; The minimal end-to-end: one add. d(sum (a+b))/d(any elt) = 1, so both inputs'
+;; gradients are all-ones. Smallest thing that drives seed + a vjp + grad.
+(deftest backward-add-smoke
+  (testing "backward! over a single add: each input's grad is all ones"
+    (let [a     (tt/->tensor [[1.0 2.0] [3.0 4.0]])
+          b     (tt/->tensor [[5.0 6.0] [7.0 8.0]])
+          grads (tt/backward! (tt/add a b))
+          ga    (tt/->vectors (tt/get-grad grads a))
+          gb    (tt/->vectors (tt/get-grad grads b))]
+      (is (tu/approx? 1.0 (get-in ga [0 0]) 1e-6))
+      (is (tu/approx? 1.0 (get-in ga [1 1]) 1e-6))
+      (is (tu/approx? 1.0 (get-in gb [0 0]) 1e-6))
+      (is (tu/approx? 1.0 (get-in gb [1 1]) 1e-6)))))
+
+;; Propagation through more than one node: (a+b)+c. This is the first test that needs
+;; topo-order to actually order a multi-op walk -- the grad has to thread from the
+;; outer add into the inner add before a/b get theirs. All input grads are still ones.
+(deftest backward-chain-smoke
+  (testing "backward! propagates through a 2-add chain"
+    (let [a     (tt/->tensor [[1.0 2.0]])
+          b     (tt/->tensor [[3.0 4.0]])
+          c     (tt/->tensor [[5.0 6.0]])
+          grads (tt/backward! (tt/add (tt/add a b) c))]
+      (is (tu/approx? 1.0 (get-in (tt/->vectors (tt/get-grad grads a)) [0 0]) 1e-6))
+      (is (tu/approx? 1.0 (get-in (tt/->vectors (tt/get-grad grads b)) [0 1]) 1e-6))
+      (is (tu/approx? 1.0 (get-in (tt/->vectors (tt/get-grad grads c)) [0 0]) 1e-6)))))
+
+;; The sum-on-reuse gate, exact form (engine-design.md #5). a feeds both sides of an
+;; add, so d(sum (a+a))/d(a elt) = 2. If backward OVERWRITES instead of summing, grad
+;; comes out 1.0 and this fails -- the unambiguous version of weight-tying-sums below.
+(deftest backward-weight-tying-smoke
+  (testing "a used twice: its two gradients SUM (grad a is all 2.0)"
+    (let [a     (tt/->tensor [[1.0 2.0] [3.0 4.0]])
+          grads (tt/backward! (tt/add a a))
+          ga    (tt/->vectors (tt/get-grad grads a))]
+      (is (tu/approx? 2.0 (get-in ga [0 0]) 1e-6))
+      (is (tu/approx? 2.0 (get-in ga [1 1]) 1e-6)))))
+
 ;; --- Stage 1 integration (whole backward via grad-check) --------------------
 
 ;; add's vjp passes the gradient straight through; analytic grad of every input

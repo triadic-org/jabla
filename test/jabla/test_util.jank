@@ -97,7 +97,7 @@
   (let [in-tensors (mapv tt/->tensor inputs)
         output     (build in-tensors)
         grads      (tt/backward! output)
-        analytic   (mapv (fn [t] (vec (flatten (tt/->vectors (tt/grad grads t))))) in-tensors)
+        analytic   (mapv (fn [t] (vec (flatten (tt/->vectors (tt/get-grad grads t))))) in-tensors)
         shapes     (mapv tt/get-shape in-tensors)
         flats      (mapv (fn [v] (vec (flatten v))) inputs)
         h          1e-2

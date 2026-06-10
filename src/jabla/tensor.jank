@@ -159,7 +159,7 @@
   [t1 t2]
   (assoc (matmul-raw t1 t2 false false) :op :matmul :inputs [t1 t2]))
 
-(defn add
+(defn add-raw
   "Elementwise a + b (same shape for now; broadcasting later). Forward via the
   native cpp/jabla.add kernel; the result carries a's shape unchanged (add is
   rank-agnostic, unlike matmul), tagged as an :add node over [t1 t2]. vjp (in
@@ -167,7 +167,11 @@
   later, sum it back down to each input's shape)."
   [t1 t2]
   (let [t3-id (cpp/jabla.add (:id t1) (:id t2))]
-    {:shape (get-shape t1) :dtype (get-dtype t1) :id t3-id :op :add :inputs [t1 t2]}))
+    {:shape (get-shape t1) :dtype (get-dtype t1) :id t3-id}))
+
+(defn add
+  [t1 t2]
+  (assoc (add-raw t1 t2) :op :add :inputs [t1 t2]))
 
 ;; TODO(you): the GPT op set, each = forward (records its node) + a vjp rule,
 ;; validated vs PyTorch: mul, relu/gelu, softmax, layernorm, embedding, cross-entropy.
@@ -242,6 +246,13 @@
   [root]
   (vec (:order (append-uniq {:seen #{} :order '()} root))))
 
+(defn add-input-grads
+  [grad [input grad-in]]
+  (letfn [(add-if-exists
+           [existing]
+            (if existing (add-raw existing grad-in) grad-in))]
+    (update grad (:id input) add-if-exists)))
+
 (defn backward!
   "Reverse-mode backward over the node-on-tensor DAG rooted at `root`.
   Contract (stage 1):
@@ -255,10 +266,22 @@
     - return the accumulated gradients (keyed so `grad` can find them by tensor).
   No global state -- the returned grads ARE the result (collapse to a stored form
   later if you prefer). TODO(you)."
-  [_]
-  (throw (ex-info "not implemented" {})))
+  [root]
+  (let [init-grads (seed-grads root)
+        order (topo-order root)]
+    (reduce
+     (fn [grads node]
+       (let [rule (vjp-rules (:op node))]
+         (if (nil? rule)
+           grads ;; do nothing if no rules
+           (let [grad-out (get grads (:id node))
+                 grad-ins (rule node grad-out)
+                 grad-in-map (mapv vector (:inputs node) grad-ins)]
+             (reduce add-input-grads grads grad-in-map))))) ;; add-raw on each grad-in
+     init-grads
+     order)))
 
-(defn grad
+(defn get-grad
   "Look up the accumulated gradient tensor for `t` in the grads returned by
   backward! (e.g. by (:id t)). TODO(you)."
   [_grads _t]
