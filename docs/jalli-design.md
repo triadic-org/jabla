@@ -49,6 +49,10 @@ mechanism.
 | `:tensor` | a structurally well-formed tensor map | reuses `jabla.schema/explain-tensor` |
 | `:and` | value satisfies **every** child schema | collects problems from each child |
 | `:matmul` | a 2-tuple `[a b]` of tensors with matching inner dims | reuses `jabla.schema/matmul-compatible?` |
+| `:same-shape` | a 2-tuple `[a b]` of tensors with equal shapes (add/mul) | reuses `jabla.schema/same-shape?` |
+
+`:matmul` and `:same-shape` share a private `pair-problems` helper (a 2-tuple of
+well-formed tensors + a shape relation) -- the template for any future binary-op boundary.
 
 `:tensor` is a leaf; `:and` is a composite (shows it nests); `:matmul` is the
 interesting one -- a **dependent-shape** check whose "value" is the op's argument tuple.
@@ -86,15 +90,19 @@ jabla.jalli   (schema-as-data + defmulti -problems + validate/explain/humanize/c
 
 ## Using it at an op boundary
 
+This is now wired into `jabla.tensor`'s public forwards (DONE):
+
 ```clojure
-(defn matmul [a b]
-  (jalli/check [:matmul] [a b])      ; clear error instead of a cblas segfault
-  ...)
+(defn matmul [t1 t2] (jalli/check [:matmul] [t1 t2]) ...)      ; clear error, not a segfault
+(defn add    [t1 t2] (jalli/check [:same-shape] [t1 t2]) ...)
+(defn mul    [t1 t2] (jalli/check [:same-shape] [t1 t2]) ...)
+(defn gelu   [t]     (jalli/check :tensor t) ...)
+(defn relu   [t]     (jalli/check :tensor t) ...)
 ```
 
-Keep it opt-in: on at the API edges and while bringing an op up; it can be flagged or
-compiled off the hot path later. The shape checks are the high-value ones -- a bad shape
-currently reads past a C++ buffer.
+Kept opt-in by being on the public forwards only -- the `-raw` kernels used in the hot
+backward path are NOT checked; it can be flagged or compiled off later. The shape checks
+are the high-value ones -- a bad shape otherwise reads past a C++ buffer.
 
 ## Extending: the next tags
 
@@ -102,10 +110,8 @@ Driven by real op-boundary needs, roughly in order:
 
 - `[:tensor {:dtype :f32 :shape [m n]}]` -- a leaf with **props**: constrain dtype and/or
   an exact/partial shape, not just "is a tensor".
-- `:same-shape` -- a 2-tuple `[a b]` with equal shapes (the elementwise-op precondition;
-  reuses `jabla.schema/same-shape?`). The `add` / `mul` analogue of `:matmul`.
 - `[:tuple s1 s2 ...]` -- positional: each element of a vector value matches its schema.
-  Generalizes the ad-hoc 2-tuple handling in `:matmul` / `:same-shape`.
+  Generalizes the `pair-problems` 2-tuple handling behind `:matmul` / `:same-shape`.
 - `[:fn pred]` -- escape hatch: an arbitrary predicate. (malli has this; it is how every
   dependent check ultimately bottoms out.)
 
@@ -129,7 +135,8 @@ either world.
 
 ## Status
 
-Minimal working core landed and green on jank: `src/jabla/jalli.jank` +
-`test/jabla/jalli_test.jank` (in the `make test` runner). Tags `:tensor`, `:and`,
-`:matmul`. Not yet wired into the `jabla.tensor` op boundaries -- that adoption is the
-next step (see "Using it at an op boundary").
+Landed and green on jank: `src/jabla/jalli.jank` + `test/jabla/jalli_test.jank` (in the
+`make test` runner). Tags `:tensor`, `:and`, `:matmul`, `:same-shape`. **Wired into all
+five `jabla.tensor` public forwards** (matmul / add / mul / gelu / relu); the throw path
+is pinned by `op-boundary-guards` in `tensor_test.jank`. Suite: 61 tests / 153 assertions.
+Next: leaf props (`[:tensor {:shape ...}]`) and `[:tuple ...]` as new ops need them.

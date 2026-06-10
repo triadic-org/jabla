@@ -36,6 +36,15 @@
     (is (not (jalli/validate [:matmul] [t23 42])))
     (is (not (jalli/validate [:matmul] [t23])))))
 
+(deftest same-shape-boundary
+  (testing ":same-shape -- a 2-tuple [a b] of tensors with equal shapes (add/mul)"
+    (is (jalli/validate [:same-shape] [t23 (assoc t23 :id 9)]))   ; both 2x3 -> ok
+    (is (nil? (jalli/explain [:same-shape] [t23 (assoc t23 :id 9)]))))
+  (testing ":same-shape rejects differing shapes and non-tensors"
+    (is (not (jalli/validate [:same-shape] [t23 t34])))           ; 2x3 vs 3x4
+    (is (seq (jalli/explain [:same-shape] [t23 t34])))
+    (is (not (jalli/validate [:same-shape] [t23 42])))))
+
 (deftest check-and-humanize
   (testing "check returns a valid value unchanged"
     (is (= t23 (jalli/check :tensor t23))))

@@ -60,13 +60,16 @@
           []
           (schema-children schema)))
 
-(defmethod -problems :matmul [_ value]
-  ;; Dependent-shape leaf for the matmul op boundary: `value` is the 2-tuple of
-  ;; operands [a b]; both must be tensors AND have compatible inner dims. This is
-  ;; the check that otherwise lets a bad shape segfault the cblas kernel.
+(defn- pair-problems
+  "Problems for a binary-op argument tuple: `value` must be a 2-tuple [a b] of
+  well-formed tensors that satisfy `relation?` (a shape relation like matmul-compatible?
+  or same-shape?). `desc` names the relation for the error message. This is the shape of
+  every dependent-shape op boundary -- the 'value' validated is the op's argument list,
+  which is how a relation between two args fits the validate-one-value contract."
+  [value relation? desc]
   (cond
     (not (and (vector? value) (= 2 (count value))))
-    [(str ":matmul expects a 2-tuple [a b], got " value)]
+    [(str "expected a 2-tuple [a b], got " value)]
 
     (seq (or (schema/explain-tensor (first value)) []))
     (schema/explain-tensor (first value))
@@ -74,11 +77,21 @@
     (seq (or (schema/explain-tensor (second value)) []))
     (schema/explain-tensor (second value))
 
-    (not (schema/matmul-compatible? (first value) (second value)))
-    [(str "matmul shapes incompatible: " (:shape (first value))
-          " x " (:shape (second value)) " (inner dims must match)")]
+    (not (relation? (first value) (second value)))
+    [(str desc ": " (:shape (first value)) " vs " (:shape (second value)))]
 
     :else []))
+
+(defmethod -problems :matmul [_ value]
+  ;; Dependent-shape leaf for the matmul op boundary: [a b] both tensors AND inner dims
+  ;; match. The check that otherwise lets a bad shape segfault the cblas kernel.
+  (pair-problems value schema/matmul-compatible?
+                 "matmul shapes incompatible (inner dims must match)"))
+
+(defmethod -problems :same-shape [_ value]
+  ;; Dependent-shape leaf for the elementwise op boundary (add / mul): [a b] both
+  ;; tensors AND equal shapes. (Relaxes to broadcastable? once broadcasting lands.)
+  (pair-problems value schema/same-shape? "shapes must be equal"))
 
 (defmethod -problems :default [schema _value]
   (throw (ex-info (str "jalli: unknown schema tag " (schema-tag schema))

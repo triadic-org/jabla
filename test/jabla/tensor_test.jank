@@ -449,6 +449,22 @@
     ;; embedding, backward! from a sum, read (tt/get-grad grads w), compare to that.
     (is true)))
 
+;; --- Op-boundary validation (jalli guards) -----------------------------------
+;; The public forwards call jalli/check on their argument shapes, so a bad shape
+;; throws a clear error at the boundary instead of segfaulting the C++ kernel. The
+;; happy paths are already covered by the op tests above; these pin the THROW path.
+(deftest op-boundary-guards
+  (let [a23 (tt/->tensor [[1.0 2.0 3.0] [4.0 5.0 6.0]])                          ; 2x3
+        b34 (tt/->tensor [[1.0 2.0 3.0 4.0] [5.0 6.0 7.0 8.0] [9.0 1.0 2.0 3.0]]) ; 3x4
+        b22 (tt/->tensor [[1.0 2.0] [3.0 4.0]])]                                 ; 2x2
+    (testing "matmul: compatible passes, incompatible inner dims throw"
+      (is (= [2 4] (tt/get-shape (tt/matmul a23 b34))))   ; 2x3 . 3x4 -> ok
+      (is (thrown? :default (tt/matmul a23 b22))))        ; inner 3 != 2
+    (testing "add / mul: equal shapes pass, differing shapes throw"
+      (is (= [2 3] (tt/get-shape (tt/add a23 a23))))
+      (is (thrown? :default (tt/add a23 b22)))            ; 2x3 vs 2x2
+      (is (thrown? :default (tt/mul a23 b22))))))
+
 ;; --- Stage 5+ (later): a detach op (GAN / actor-critic), then assemble one attention
 ;; block element-wise vs PyTorch (the Step 3 validator). The lazy-realize / fusion /
 ;; backend stages are tracked in docs/engine-design.md.

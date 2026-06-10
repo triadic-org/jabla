@@ -1,4 +1,5 @@
 (ns jabla.tensor
+  (:require [jabla.jalli :as jalli])
   (:include "jabla.hpp"))
 
 (def DEFAULT_DTYPE :f32)
@@ -159,8 +160,11 @@
   "a (m x k) . b (k x n) -> (m x n), the plain matrix product. The public forward
   op: a node-free matmul-raw (no transposes) tagged as a :matmul node over [t1 t2].
   vjp (vjp-rules) is two transposed matmul-raws of the upstream gradient with a and b
-  (dA = grad . Bt, dB = At . grad), routed back through the same kernel via CblasTrans."
+  (dA = grad . Bt, dB = At . grad), routed back through the same kernel via CblasTrans.
+  Guards the boundary with jalli (both rank-2 tensors, inner dims match) so a bad shape
+  throws a clear error instead of reading past a cblas buffer."
   [t1 t2]
+  (jalli/check [:matmul] [t1 t2])
   (->node (matmul-raw t1 t2 false false) :matmul [t1 t2]))
 
 (defn add-raw
@@ -175,8 +179,10 @@
 (defn add
   "Elementwise a + b, the public forward op: a node-free add-raw tagged as an :add
   node over [t1 t2]. vjp (vjp-rules) passes the gradient straight through to both
-  inputs (with broadcasting, later, sum it back down to each input's shape)."
+  inputs (with broadcasting, later, sum it back down to each input's shape).
+  Guards the boundary with jalli (both tensors, equal shapes)."
   [t1 t2]
+  (jalli/check [:same-shape] [t1 t2])
   (->node (add-raw t1 t2) :add [t1 t2]))
 
 (defn- mul-raw
@@ -187,8 +193,10 @@
 
 (defn mul
   "Elementwise a * b (Hadamard product -- NOT matmul). Public forward op tagged :mul
-  over [t1 t2]. vjp: dA = grad * b, dB = grad * a (each an elementwise mul-raw)."
+  over [t1 t2]. vjp: dA = grad * b, dB = grad * a (each an elementwise mul-raw).
+  Guards the boundary with jalli (both tensors, equal shapes)."
   [t1 t2]
+  (jalli/check [:same-shape] [t1 t2])
   (->node (mul-raw t1 t2) :mul [t1 t2]))
 
 (defn- gelu-raw
@@ -207,6 +215,7 @@
   "GELU activation (tanh approximation), the public forward op tagged :gelu over [t].
   vjp: dx = grad-out * gelu'(x) via the fused geluBackward kernel."
   [t]
+  (jalli/check :tensor t)
   (->node (gelu-raw t) :gelu [t]))
 
 (defn- relu-raw
@@ -215,6 +224,7 @@
 
 (defn relu
   [t]
+  (jalli/check :tensor t)
   (->node (relu-raw t) :relu [t]))
 
 (defn relu-backward-raw
