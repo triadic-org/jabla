@@ -263,7 +263,7 @@
 
    :relu (fn [node grad-out]
            (let [[x] (:inputs node)]
-             [(gelu-backward-raw x grad-out)]))  ; dx = grad-out * relu'(x)
+             [(relu-backward-raw x grad-out)]))  ; dx = grad-out * relu'(x)
    })
 
 (defn ones-from-shape
