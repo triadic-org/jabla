@@ -63,15 +63,15 @@
     ["not a map"]
     (->> [(when-not (shape? (:shape t))
             (str ":shape must be a non-empty vector of positive dims, got "
-                 (str (:shape t))))
+                 (:shape t)))
           (when-not (contains? dtypes (:dtype t))
-            (str ":dtype must be one of " (str dtypes) ", got " (str (:dtype t))))
+            (str ":dtype must be one of " dtypes ", got " (:dtype t)))
           (when (nil? (:id t))
             ":id is missing (the C++ registry handle)")
           (when-not (contains? ops (:op t))
-            (str ":op must be one of " (str ops) ", got " (str (:op t))))
+            (str ":op must be one of " ops ", got " (:op t)))
           (when-not (vector? (:inputs t))
-            (str ":inputs must be a vector of input tensors, got " (str (:inputs t))))]
+            (str ":inputs must be a vector of input tensors, got " (:inputs t)))]
          (remove nil?)
          vec)))
 
