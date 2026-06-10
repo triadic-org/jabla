@@ -228,11 +228,11 @@
   [{:keys [seen] :as acc}, node]
   (let [node-id (:id node)]
     (if (contains? seen node-id)
-    acc ;; return original if already seen
-    (-> acc
-        (update :seen conj node-id) ;; mark as seen before recursion
-        (as-> x (reduce append-uniq x (:inputs node)))
-        (update :order conj node)))))
+      acc ;; return original if already seen
+      (-> acc
+          (update :seen conj node-id) ;; mark as seen before recursion
+          (as-> x (reduce append-uniq x (:inputs node)))
+          (update :order conj node)))))
 
 (defn topo-order
   "Reachable nodes of the DAG rooted at `root`, reverse-topological (root first):
