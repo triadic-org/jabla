@@ -111,9 +111,8 @@
 ;; grad to the central finite difference of sum(output) (see test-util). `build` takes
 ;; a vector of input tensors and returns the output tensor; inputs are nested vectors.
 ;; Bodies stay commented (with a vacuous (is true)) until backward! / grad land;
-;; uncomment as you implement. These assume the stage-1 API: (backward! root) returns
-;; the grads, (grad grads t) reads one out -- if your signatures differ, adjust the
-;; helper's two calls (test-util) and these.
+;; uncomment as you implement. These use the stage-1 API: (backward! root) returns
+;; the grads map, (get-grad grads t) reads one out.
 ;;
 ;; Build bottom-up: the BUILDING-BLOCK tests below check each piece of backward! in
 ;; isolation (transpose, the vjp rules, topo-order) so a failure points at one part;

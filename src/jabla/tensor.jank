@@ -9,8 +9,10 @@
 ;; element-wise; end-to-end, nanoGPT's loss-per-step curve on TinyShakespeare
 ;; (log to experiments/). References: reference/llm.c, reference/nanoGPT.
 ;;
-;; The op forwards (matmul + add) run on the native kernels in jabla.hpp; the
-;; eager explicit-graph engine (backward! over a node-on-tensor DAG) is next.
+;; The op forwards (matmul + add) run on native kernels in jabla.hpp, and the eager
+;; explicit-graph engine (backward! over the node-on-tensor DAG) is done -- stage 1
+;; complete. Remaining stages (arena/free, lazy realize, fusion, multi-backend) are
+;; tracked in docs/engine-design.md.
 ;; ============================================================================
 
 ;; --- Representation (decided) -----------------------------------------------
@@ -42,12 +44,9 @@
 ;;   through the matmul kernel (cpp/jabla.matmul). add's vjp passes the grad through.
 ;; Full decision + the staged eager -> lazy -> fused roadmap: docs/engine-design.md.
 
-
-
-
 ;; --- Public surface ---------------------------------------------------------
-;; Construction + readback + matmul + add forwards are done; recording provenance
-;; on the forwards + backward! / grad over the DAG are next (stage 1).
+;; Construction + readback, the matmul/add forwards (which record :op/:inputs), and
+;; backward! / get-grad over the DAG are all done (stage 1 complete).
 
 (defn- shape-of
   "Infer a row-major shape from nested vectors: count siblings at each depth,
@@ -130,8 +129,8 @@
 ;; forward is a BLAS call only for the contraction ops; add/relu are plain
 ;; elementwise loops. The common thread is the tape, not BLAS.
 ;;
-;; The forwards now also record their graph node (:op + :inputs); the vjp rules
-;; that consume those nodes live in the vjp-rules registry below (TODO(you)).
+;; The forwards record their graph node (:op + :inputs); the vjp rules that consume
+;; those nodes live in the vjp-rules registry below (:add + :matmul wired).
 
 (defn- matmul-raw
   "Trans-capable matrix product over the registry: op(t1) . op(t2), where op(x) is
@@ -160,26 +159,28 @@
   (assoc (matmul-raw t1 t2 false false) :op :matmul :inputs [t1 t2]))
 
 (defn add-raw
-  "Elementwise a + b (same shape for now; broadcasting later). Forward via the
-  native cpp/jabla.add kernel; the result carries a's shape unchanged (add is
-  rank-agnostic, unlike matmul), tagged as an :add node over [t1 t2]. vjp (in
-  vjp-rules) passes the gradient straight through to both inputs (with broadcasting,
-  later, sum it back down to each input's shape)."
+  "Elementwise a + b (same shape for now; broadcasting later) via the native
+  cpp/jabla.add kernel; the result carries a's shape unchanged (add is rank-agnostic,
+  unlike matmul). Returns a bare tensor (no :op/:inputs) -- the raw kernel used by the
+  add forward AND by gradient accumulation in backward!, so neither records nodes."
   [t1 t2]
   (let [t3-id (cpp/jabla.add (:id t1) (:id t2))]
     {:shape (get-shape t1) :dtype (get-dtype t1) :id t3-id}))
 
 (defn add
+  "Elementwise a + b, the public forward op: a node-free add-raw tagged as an :add
+  node over [t1 t2]. vjp (vjp-rules) passes the gradient straight through to both
+  inputs (with broadcasting, later, sum it back down to each input's shape)."
   [t1 t2]
   (assoc (add-raw t1 t2) :op :add :inputs [t1 t2]))
 
 ;; TODO(you): the GPT op set, each = forward (records its node) + a vjp rule,
 ;; validated vs PyTorch: mul, relu/gelu, softmax, layernorm, embedding, cross-entropy.
 
-;; --- Backward (stage 1 -- TODO(you)) -----------------------------------------
-;; The engine is three pieces: a vjp-rules registry (op -> backward rule),
-;; backward! (walk the DAG, dispatch, accumulate), and grad (read a result out).
-;; Scaffolded as contracts; the traversal + the calculus are yours to implement.
+;; --- Backward (stage 1 -- done) ----------------------------------------------
+;; Three pieces: the vjp-rules registry (op -> backward rule), backward! (walk the
+;; DAG reverse-topo, dispatch each vjp, accumulate into inputs), and get-grad (read
+;; a result out). seed-grads / topo-order / add-input-grads are the helpers.
 
 (def vjp-rules
   "Registry mapping an :op keyword to its vjp (vector-Jacobian product) rule --
