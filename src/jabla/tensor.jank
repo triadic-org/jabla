@@ -209,6 +209,19 @@
   [t]
   (->node (gelu-raw t) :gelu [t]))
 
+(defn- relu-raw
+  [t]
+  {:shape (get-shape t) :dtype (get-dtype t) :id (cpp/jabla.relu (:id t))})
+
+(defn relu
+  [t]
+  (->node (relu-raw t) :relu [t]))
+
+(defn relu-backward-raw
+  [x grad-out]
+  {:shape (get-shape x) :dtype (get-dtype x)
+   :id (cpp/jabla.reluBackward (:id x) (:id grad-out))})
+
 ;; TODO(you): the remaining GPT op set, each = forward (records its node) + a vjp
 ;; rule, validated vs PyTorch: relu, softmax, layernorm, embedding, cross-entropy.
 ;; (mul + gelu done.)
@@ -247,6 +260,10 @@
    :gelu (fn [node grad-out]
            (let [[x] (:inputs node)]
              [(gelu-backward-raw x grad-out)]))  ; dx = grad-out * gelu'(x)
+
+   :relu (fn [node grad-out]
+           (let [[x] (:inputs node)]
+             [(gelu-backward-raw x grad-out)]))  ; dx = grad-out * relu'(x)
    })
 
 (defn ones-from-shape

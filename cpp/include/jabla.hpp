@@ -83,6 +83,29 @@ namespace jabla {
     return createTensor(std::move(c));
   }
 
+  inline int relu(int xId) {
+    const std::vector<float>& x = tensors.at(xId);
+    std::vector<float> y(x.size());
+
+    for (std::size_t i= 0; i < y.size(); ++i) {
+      float xi = x[i];
+      y[i] = xi > 0.0f? xi : 0.0f;
+    }
+    return createTensor(std::move(y));
+  }
+
+  inline int reluBackward(int xId, int dyId) {
+    const std::vector<float>& x = tensors.at(xId);
+    const std::vector<float>& dy = tensors.at(dyId);
+    std::vector<float> dx(x.size());
+
+    for (std::size_t i = 0; i < dx.size(); ++i){
+      float xi = x[i];
+      dx[i] = xi > 0.0f ? dy[i] : 0.0f;
+    }
+    return createTensor(std::move(dx));
+  }
+
   // gelu kernel: elementwise GELU activation, tanh approximation (matches nanoGPT's
   // new_gelu and llm.c): gelu(x) = 0.5 x (1 + tanh(sqrt(2/pi) (x + 0.044715 x^3))).
   // (Exact-erf GELU is an alternative -- switch the body if validating vs nn.GELU().)
