@@ -305,7 +305,39 @@
           [[0.1 0.2] [0.3 0.4] [0.5 0.6]]      ; W : 3x2  -> x.W is 2x2
           [[0.5 0.5] [0.5 0.5]]]))))           ; b : 2x2
 
-;; --- Stage 5+ (later stages): GPT op set (mul, relu/gelu, softmax, layernorm,
-;; embedding, cross-entropy) + a detach op (GAN / actor-critic), then one attention
-;; block element-wise vs PyTorch. Add deftests here as each op + its vjp lands. The
-;; lazy-realize / fusion / backend stages are tracked in docs/engine-design.md.
+;; --- Op set: mul, gelu (elementwise; mechanical, assistant-implemented) -------
+
+;; mul: elementwise Hadamard product (NOT matmul). vjp dA = grad*b, dB = grad*a.
+(deftest mul-forward
+  (testing "elementwise mul (Hadamard)"
+    (let [a (tt/->tensor [[1.0 2.0] [3.0 4.0]])
+          b (tt/->tensor [[5.0 6.0] [7.0 8.0]])
+          c (tt/->vectors (tt/mul a b))]
+      (is (tu/approx? 5.0  (get-in c [0 0]) 1e-6))     ; 1*5
+      (is (tu/approx? 32.0 (get-in c [1 1]) 1e-6)))))   ; 4*8
+
+(deftest mul-backward
+  (testing "mul gradients vs finite differences"
+    (is (tu/tensor-grad-check (fn [[a b]] (tt/mul a b))
+                              [[[1.0 2.0] [3.0 4.0]]
+                               [[5.0 6.0] [7.0 8.0]]]))))
+
+;; gelu: tanh-approx GELU. Reference values from PyTorch F.gelu(., approximate='tanh'):
+;; gelu(0)=0, gelu(1)~0.8412, gelu(-1)~-0.1588. The forward check pins it to PyTorch;
+;; the grad-check validates geluBackward = d(gelu)/dx numerically against the forward.
+(deftest gelu-forward
+  (testing "gelu (tanh approx) matches known values"
+    (let [c (tt/->vectors (tt/gelu (tt/->tensor [[0.0 1.0] [-1.0 2.0]])))]
+      (is (tu/approx? 0.0     (get-in c [0 0]) 1e-6))
+      (is (tu/approx? 0.8412  (get-in c [0 1]) 1e-3))
+      (is (tu/approx? -0.1588 (get-in c [1 0]) 1e-3)))))
+
+(deftest gelu-backward
+  (testing "gelu gradients vs finite differences"
+    (is (tu/tensor-grad-check (fn [[x]] (tt/gelu x))
+                              [[[0.5 -0.5] [1.5 -2.0]]]))))
+
+;; --- Stage 5+ (later): the rest of the op set (relu, softmax, layernorm, embedding,
+;; cross-entropy) + a detach op (GAN / actor-critic), then one attention block element-
+;; wise vs PyTorch. Add deftests here as each op + its vjp lands. The lazy-realize /
+;; fusion / backend stages are tracked in docs/engine-design.md.

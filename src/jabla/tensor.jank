@@ -174,8 +174,39 @@
   [t1 t2]
   (assoc (add-raw t1 t2) :op :add :inputs [t1 t2]))
 
-;; TODO(you): the GPT op set, each = forward (records its node) + a vjp rule,
-;; validated vs PyTorch: mul, relu/gelu, softmax, layernorm, embedding, cross-entropy.
+(defn- mul-raw
+  "Elementwise a * b (Hadamard product), same shape, via cpp/jabla.mul. Bare tensor
+  (no :op/:inputs) -- used by the mul forward and by the :mul and :gelu vjp rules."
+  [t1 t2]
+  {:shape (get-shape t1) :dtype (get-dtype t1) :id (cpp/jabla.mul (:id t1) (:id t2))})
+
+(defn mul
+  "Elementwise a * b (Hadamard product -- NOT matmul). Public forward op tagged :mul
+  over [t1 t2]. vjp: dA = grad * b, dB = grad * a (each an elementwise mul-raw)."
+  [t1 t2]
+  (assoc (mul-raw t1 t2) :op :mul :inputs [t1 t2]))
+
+(defn- gelu-raw
+  "GELU activation (tanh approximation, matching nanoGPT new_gelu / llm.c) via
+  cpp/jabla.gelu. Bare tensor (no :op/:inputs); the gelu forward records the node."
+  [t]
+  {:shape (get-shape t) :dtype (get-dtype t) :id (cpp/jabla.gelu (:id t))})
+
+(defn- gelu-backward-raw
+  "Fused gelu vjp: dx = grad-out * gelu'(x), via cpp/jabla.geluBackward. Bare tensor."
+  [x grad-out]
+  {:shape (get-shape x) :dtype (get-dtype x)
+   :id (cpp/jabla.geluBackward (:id x) (:id grad-out))})
+
+(defn gelu
+  "GELU activation (tanh approximation), the public forward op tagged :gelu over [t].
+  vjp: dx = grad-out * gelu'(x) via the fused geluBackward kernel."
+  [t]
+  (assoc (gelu-raw t) :op :gelu :inputs [t]))
+
+;; TODO(you): the remaining GPT op set, each = forward (records its node) + a vjp
+;; rule, validated vs PyTorch: relu, softmax, layernorm, embedding, cross-entropy.
+;; (mul + gelu done.)
 
 ;; --- Backward (stage 1 -- done) ----------------------------------------------
 ;; Three pieces: the vjp-rules registry (op -> backward rule), backward! (walk the
@@ -193,15 +224,24 @@
   per entry in (:inputs node), to be accumulated into those inputs. Adjust the
   signature to taste -- it's the seam, not a mandate.
 
-  Wired: :add (grad-out straight through to both inputs) and :matmul (dA =
-  grad-out . Bt, dB = At . grad-out, via transposed matmul-raws -- CblasTrans, no
-  materialized transpose). TODO(you): the rest of the GPT op set as each forward lands."
+  Wired: :add (straight through), :matmul (dA = grad-out . Bt, dB = At . grad-out via
+  transposed matmul-raws), :mul (dA = grad-out * b, dB = grad-out * a), :gelu (dx =
+  grad-out * gelu'(x), fused). TODO(you): the rest of the op set as each forward lands."
   {:add (fn [_ grad-out] [grad-out grad-out])
 
    :matmul (fn [node grad-out]
              (let [[t1 t2] (:inputs node)]
                [(matmul-raw grad-out t2 false true)    ; dA = grad-out . Bt
                 (matmul-raw t1 grad-out true false)])) ; dB = At . grad-out
+
+   :mul (fn [node grad-out]
+          (let [[t1 t2] (:inputs node)]
+            [(mul-raw grad-out t2)     ; dA = grad-out * b
+             (mul-raw grad-out t1)]))  ; dB = grad-out * a
+
+   :gelu (fn [node grad-out]
+           (let [[x] (:inputs node)]
+             [(gelu-backward-raw x grad-out)]))  ; dx = grad-out * gelu'(x)
    })
 
 (defn ones-from-shape

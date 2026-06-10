@@ -133,3 +133,37 @@ TEST_CASE("add leaves its inputs untouched (no aliasing)") {
   CHECK(getTensor(a) == std::vector<float>{1.0f, 2.0f, 3.0f, 4.0f});
   CHECK(getTensor(b) == std::vector<float>{10.0f, 20.0f, 30.0f, 40.0f});
 }
+
+// --- mul (elementwise Hadamard; no BLAS) ------------------------------------
+TEST_CASE("mul: elementwise (2x2) * (2x2)") {
+  clearTensors();
+  int a = createTensor({1.0f, 2.0f, 3.0f, 4.0f});
+  int b = createTensor({5.0f, 6.0f, 7.0f, 8.0f});
+  auto v = getTensor(mul(a, b));
+  REQUIRE(v.size() == 4);
+  CHECK(v[0] == doctest::Approx(5.0f));     // 1*5
+  CHECK(v[1] == doctest::Approx(12.0f));    // 2*6
+  CHECK(v[3] == doctest::Approx(32.0f));    // 4*8
+}
+
+// --- gelu (tanh approximation) + its fused backward -------------------------
+// Reference values: PyTorch F.gelu(., approximate='tanh'): gelu(1)~0.8412,
+// gelu(-1)~-0.1588, gelu(0)=0. gelu'(0) = 0.5 (so geluBackward(0, dy) = 0.5*dy).
+TEST_CASE("gelu: tanh-approx known values") {
+  clearTensors();
+  int x = createTensor({0.0f, 1.0f, -1.0f, 2.0f});
+  auto v = getTensor(gelu(x));
+  REQUIRE(v.size() == 4);
+  CHECK(v[0] == doctest::Approx(0.0f));
+  CHECK(v[1] == doctest::Approx(0.8412f).epsilon(0.01));
+  CHECK(v[2] == doctest::Approx(-0.1588f).epsilon(0.01));
+}
+
+TEST_CASE("geluBackward = dy * gelu'(x); gelu'(0) = 0.5") {
+  clearTensors();
+  int x  = createTensor({0.0f});
+  int dy = createTensor({2.0f});
+  auto v = getTensor(geluBackward(x, dy));
+  REQUIRE(v.size() == 1);
+  CHECK(v[0] == doctest::Approx(1.0f));    // 2.0 * gelu'(0)=0.5
+}
