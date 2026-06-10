@@ -20,10 +20,11 @@ fast devbox probe for the maybes.
 
 | Tool | Kind | Works on jank? | Verdict |
 |---|---|---|---|
-| **core.typed** | static type checker | **No** — bound to the JVM analyzer (`tools.analyzer.jvm`); also largely dormant upstream | **Skip.** Don't probe. |
-| **clojure.spec.alpha** | runtime spec/validation + gen | **Unknown** — ships with Clojure, but jank may not have ported `spec.alpha` | Probe (`experiments/typing/spec_probe.jank`). Fallback if malli won't load. |
-| **malli** | runtime schema-as-data + humanized errors + gen | **Unknown** — mostly pure Clojure, but uses protocols/regex/etc. jank may lack | Probe (`experiments/typing/malli_probe.jank`). The nicest *if* it loads. |
-| **hand-rolled (`jabla.schema`)** | runtime predicates + asserts | **Yes** — bedrock core only, zero deps | **Adopt now.** The safe baseline; covers all three goals. |
+| **core.typed** | static type checker | **No** — bound to the JVM analyzer (`tools.analyzer.jvm`); also largely dormant upstream | **Skip.** Not probed (JVM-bound by construction). |
+| **clojure.spec.alpha** | runtime spec/validation + gen | **No (probed)** — ships as `.clj`; jank's loader only reads `.cljc`/`.jank`, so it can't even be found | **Can't use.** See empirical results below. |
+| **malli** | runtime schema-as-data + humanized errors + gen | **No (probed)** — `.cljc` files are found, but jank's lexer aborts inside `malli/impl/util.cljc` | **Can't use.** See below. |
+| **plumatic/schema** | runtime schema-as-data + coercion | **No (probed)** — `.cljc` found, but `deftype` (in `schema.utils`) isn't ported in jank-alpha | **Can't use.** See below. |
+| **hand-rolled (`jabla.schema`)** | runtime predicates + asserts | **Yes** — bedrock core only, zero deps | **Adopt.** The only option that runs today; covers all three goals. |
 | **clj-kondo** | static analysis | **Yes** — already in the pipeline | Lean on it for what it catches (see below). |
 
 ## The "catch bugs at compile time" reality
@@ -53,38 +54,67 @@ option and it doesn't load). But you already have the practical equivalents:
   (off the build/lint path). Each builds a `Tensor` schema and validates a good +
   bad value, so a successful run also shows the ergonomics.
 
-### Devbox probe steps
+## Empirical results (probed 2026-06-10, on the devbox, jank 0.1-alpha)
+
+All three external libs were fetched (`git clone`) and `require`d under jank. **None
+load.** Three *independent* root causes, each on its own sufficient to block:
+
+1. **Loader reads only `.cljc` / `.jank`, not `.clj`.** Verified with a 3-file probe
+   (`foo.bar.clj` / `.cljc` / `.jank`): the `.clj` require fails `module-not-found`,
+   the other two load. So `clojure.spec.alpha` (ships as `clojure/spec/alpha.clj`) and
+   any lib whose required namespaces are `.clj` (e.g. `schema.macros`) are unreachable.
+2. **`.cljc` reads under a `:jank` reader-conditional branch** — not `:clj`. Verified:
+   `#?(:jank :jank :clj :clj :default :other)` evaluates to `:jank`. Existing libs guard
+   their host code behind `:clj` / `:cljs`, *neither of which fires under jank* — so even
+   a findable `.cljc` silently loses its interop / macro bodies. (Fixing this needs the
+   **upstream library** to add `:jank` branches, not just a maturing jank.)
+3. **jank-alpha hasn't ported the foundations these libs are built on** — `deftype`,
+   and the lexer/reader isn't yet complete enough for malli's source.
+
+Per-lib outcome:
+
+| Lib | Failure (exact) |
+|---|---|
+| **clojure.spec.alpha** | `module-not-found` — it's a `.clj` (cause #1). Dead on arrival. |
+| **plumatic/schema** | `analyze/unresolved-symbol: Unable to resolve symbol 'deftype'` in `schema/utils.cljc` (cause #3). Schema is built on deftype/protocols throughout. |
+| **malli** | `lex/invalid-number: Unexpected end of integer` in `malli/impl/util.cljc` (cause #3) — jank's alpha lexer can't even read malli's source. |
+
+### Reproduce
 
 ```bash
-# malli:
-#   add to deps.edn :deps ->  metosin/malli {:mvn/version "0.16.4"}
-make module-path
-jank --module-path "$(clojure -A:test -Spath):experiments/typing" run-main jabla.malli-probe
+# Loader-extension + reader-conditional probes are inline above; lib probes:
+cd /tmp && git clone --depth 1 https://github.com/clojure/spec.alpha.git spec
+git clone --depth 1 https://github.com/plumatic/schema.git schema
+git clone --depth 1 https://github.com/metosin/malli.git malli
+git clone --depth 1 https://github.com/borkdude/dynaload.git dynaload   # malli's one runtime dep
 
-# spec (no dep needed if jank bundles it):
-jank --module-path src:test:experiments/typing run-main jabla.spec-probe
+cd <repo>
+jank --module-path "experiments/typing:/tmp/spec/src/main/clojure"        run-main jabla.spec-probe
+jank --module-path "experiments/typing:/tmp/schema/src/cljc:/tmp/schema/src/clj" run-main jabla.schema-probe
+jank --module-path "experiments/typing:/tmp/malli/src:/tmp/dynaload/src"  run-main jabla.malli-probe
 ```
-A require that aborts = that lib doesn't load under jank (a useful data point; maybe
-a jank issue to file). A clean run prints the validation + humanized/explain output.
+(Probe namespaces live in `experiments/typing/jabla/*_probe.jank` — gitignored; each is
+a one-line `require` whose abort IS the data point. The lexer/`deftype` failures are
+genuine jank-alpha bugs/gaps worth filing upstream.)
 
 ## Recommendation
 
-1. **Adopt `jabla.schema` now.** Add `:pre` / `check` at the API edges — `->tensor`
+1. **Adopt `jabla.schema`** — it is not a fallback, it is the *only* runtime-schema
+   option that loads on jank today. Add `:pre` / `check` at the API edges — `->tensor`
    (valid nested input), `matmul`/`add`/`mul` (`tensor?` + shape compatibility),
-   `backward!` (valid root). Keep it opt-in: on at the edges and while bringing an op
-   up; it can be flagged/compiled off the hot path later. This satisfies all three
-   goals today with zero risk.
-2. **Run the two probes on the devbox** (~10 min). If **malli loads**, it's a strict
-   upgrade for *errors + generative testing* — migrate `jabla.schema`'s structural
-   part to a malli `Tensor` schema, but keep the shape-compat predicates as code
-   (malli won't express them). If only **spec loads**, same idea, lower ergonomics.
-   If **neither loads**, stay on `jabla.schema` — you lose nothing essential.
+   `backward!` (valid root). Keep it opt-in: on at the edges and while bringing an op up;
+   it can be flagged/compiled off the hot path later.
+2. **Re-probe when jank matures** (track the lexer + `deftype` gaps). But note cause #2:
+   even a fixed jank won't run malli/schema until *they* ship `:jank` reader-conditional
+   branches — so the realistic external-lib path is "jank gains a `:clj`-compatible mode"
+   or "a jank-native schema lib appears," not "malli just works." Don't block on it.
 3. **Skip core.typed.** And keep leaning on **clj-kondo** as the static net.
 
-Net: the dependent **shape** checks — the bugs that actually hurt — are a hand-written
-predicate in every world. malli/spec would only prettify the *structural* half and add
-generators. So the floor (`jabla.schema`) is already most of the value; the probes just
-tell us whether to put a nicer face on it.
+Net: external schema libs are **off the table on jank-alpha** — confirmed, not assumed.
+And even if one loaded, the dependent **shape** checks — the bugs that actually hurt —
+are a hand-written predicate in every world; a lib would only prettify the *structural*
+half and add generators. So `jabla.schema` isn't a compromise floor; it's both the
+high-value part and the only part that runs.
 
 ## Sources / pointers
 - malli: <https://github.com/metosin/malli>

@@ -1,0 +1,117 @@
+(ns jabla.jalli
+  (:require [clojure.string :as str]
+            [jabla.schema :as schema]))
+
+;; ============================================================================
+;; jalli -- a tiny malli-flavored, schema-as-DATA validation layer for jabla,
+;; built the only way it can be on jank-alpha: multimethods over plain data.
+;;
+;; WHY this shape (not malli/spec/plumatic-schema): none of those load on jank --
+;; they are protocol/record-based, and jank-alpha has no defprotocol/defrecord/
+;; deftype/reify (it DOES have defmulti + maps/vectors). It also can't even lex
+;; malli's source (a `-r...` symbol lexer bug). Full evidence: docs/typing-spike.md.
+;; So jalli keeps malli's two best ideas -- schemas are data, errors are data --
+;; and drops its implementation (protocols) for defmulti dispatch on a tag keyword.
+;;
+;; A SCHEMA is data:
+;;   - a keyword            a leaf, e.g. :tensor
+;;   - a [tag & children]   a composite, e.g. [:and :tensor ...], or [:matmul]
+;; The leaf checks reuse jabla.schema's predicates (tensor?, matmul-compatible?) --
+;; the dependent-shape checks are hand-written code in every world (malli can't
+;; express them either), so jalli just gives them a declarative, composable face.
+;;
+;; The public surface mirrors malli on purpose (validate / explain / humanize /
+;; check), so the muscle memory transfers and a future swap to real malli -- once
+;; jank grows protocols + the lexer fix, OR malli ships :jank reader-conditionals --
+;; is mechanical. See docs/jalli-design.md for the grammar + migration path.
+;; ============================================================================
+
+;; --- Schema accessors -------------------------------------------------------
+
+(defn- schema-tag
+  "The dispatch keyword for a schema: the keyword itself, or a vector's head."
+  [s]
+  (if (vector? s) (first s) s))
+
+(defn- schema-children
+  "The child schemas of a composite (empty for a bare-keyword leaf)."
+  [s]
+  (if (vector? s) (rest s) ()))
+
+;; --- The engine: -problems (schema -> value -> seq of problem strings) ------
+;; This is the one extensible point. validate / explain / humanize / check are all
+;; thin wrappers over it. To add a schema type, add a -problems defmethod -- no
+;; protocol to implement, just a method keyed on the tag (jank has defmulti).
+;; An empty seq means valid; a non-empty seq is the human-readable reasons.
+
+(defmulti -problems
+  "Return a seq of problem strings for `value` under `schema` ([] = valid)."
+  (fn [schema _value] (schema-tag schema)))
+
+(defmethod -problems :tensor [_ value]
+  ;; Leaf: structurally a well-formed tensor map. Reuse schema/explain-tensor,
+  ;; which already returns nil (valid) or a vector of problems.
+  (or (schema/explain-tensor value) []))
+
+(defmethod -problems :and [schema value]
+  ;; Conjunction: value must satisfy every child schema. Collect all problems
+  ;; (not just the first) so explain is complete.
+  (reduce (fn [acc child] (into acc (-problems child value)))
+          []
+          (schema-children schema)))
+
+(defmethod -problems :matmul [_ value]
+  ;; Dependent-shape leaf for the matmul op boundary: `value` is the 2-tuple of
+  ;; operands [a b]; both must be tensors AND have compatible inner dims. This is
+  ;; the check that otherwise lets a bad shape segfault the cblas kernel.
+  (cond
+    (not (and (vector? value) (= 2 (count value))))
+    [(str ":matmul expects a 2-tuple [a b], got " value)]
+
+    (seq (or (schema/explain-tensor (first value)) []))
+    (schema/explain-tensor (first value))
+
+    (seq (or (schema/explain-tensor (second value)) []))
+    (schema/explain-tensor (second value))
+
+    (not (schema/matmul-compatible? (first value) (second value)))
+    [(str "matmul shapes incompatible: " (:shape (first value))
+          " x " (:shape (second value)) " (inner dims must match)")]
+
+    :else []))
+
+(defmethod -problems :default [schema _value]
+  (throw (ex-info (str "jalli: unknown schema tag " (schema-tag schema))
+                  {:schema schema})))
+
+;; --- Public surface (mirrors malli) -----------------------------------------
+
+(defn validate
+  "True iff `value` satisfies `schema`."
+  [schema value]
+  (not (seq (-problems schema value))))
+
+(defn explain
+  "nil if valid, else a vector of problem strings -- data describing what failed.
+  Pure; safe to call in a REPL on a suspect value."
+  [schema value]
+  ;; NB: `into []` not `vec` -- jank-alpha's `vec` throws on an already-vector input
+  ;; (see private/jank-alpha-findings.md, bug 3); `into []` is idempotent.
+  (let [ps (-problems schema value)]
+    (if (seq ps) (into [] ps) nil)))
+
+(defn humanize
+  "A single human-readable string for an `explain` result (nil -> nil)."
+  [problems]
+  (when (seq problems)
+    (str/join "; " problems)))
+
+(defn check
+  "Return `value` if valid, else throw ex-info naming the problems. Use at an op
+  boundary for a clear failure instead of a downstream segfault. Example:
+    (defn matmul [a b] (jalli/check [:matmul] [a b]) ...)"
+  [schema value]
+  (let [ps (-problems schema value)]
+    (if (seq ps)
+      (throw (ex-info (str "jalli: " (humanize ps)) {:schema schema :problems (into [] ps)}))
+      value)))

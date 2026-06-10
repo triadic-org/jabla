@@ -1,0 +1,44 @@
+(ns jabla.jalli-test
+  (:require [clojure.test :refer [deftest is testing]]
+            [jabla.jalli :as jalli]))
+
+;; Tests for the schema-as-data validation layer (jabla.jalli). Doubles as
+;; executable documentation of the schema grammar: a leaf (:tensor), a composite
+;; (:and), and a dependent-shape op-boundary schema (:matmul over a 2-tuple).
+
+(def t23 {:shape [2 3] :dtype :f32 :id 0 :op :leaf :inputs []})   ; 2x3 tensor
+(def t34 {:shape [3 4] :dtype :f32 :id 1 :op :leaf :inputs []})   ; 3x4 tensor
+(def t24 {:shape [2 4] :dtype :f32 :id 2 :op :leaf :inputs []})   ; 2x4 tensor
+(def bad-dtype (assoc t23 :dtype :f64))
+
+(deftest leaf-tensor
+  (testing ":tensor leaf -- bare keyword and [:tensor] vector both validate"
+    (is (jalli/validate :tensor t23))
+    (is (jalli/validate [:tensor] t23))
+    (is (nil? (jalli/explain :tensor t23))))
+  (testing "a malformed tensor fails, and explain names the problem"
+    (is (not (jalli/validate :tensor bad-dtype)))
+    (is (seq (jalli/explain :tensor bad-dtype)))))
+
+(deftest composite-and
+  (testing ":and -- value must satisfy every child schema"
+    (is (jalli/validate [:and :tensor] t23))
+    (is (not (jalli/validate [:and :tensor] bad-dtype)))))
+
+(deftest matmul-boundary
+  (testing ":matmul -- a 2-tuple [a b] of tensors with matching inner dims"
+    (is (jalli/validate [:matmul] [t23 t34]))          ; 2x3 . 3x4 -> ok
+    (is (nil? (jalli/explain [:matmul] [t23 t34]))))
+  (testing ":matmul rejects incompatible shapes (the segfault-prevention case)"
+    (is (not (jalli/validate [:matmul] [t23 t24])))    ; 2x3 . 2x4 -> 3 != 2
+    (is (seq (jalli/explain [:matmul] [t23 t24]))))
+  (testing ":matmul rejects a non-tensor operand and a bad arity"
+    (is (not (jalli/validate [:matmul] [t23 42])))
+    (is (not (jalli/validate [:matmul] [t23])))))
+
+(deftest check-and-humanize
+  (testing "check returns a valid value unchanged"
+    (is (= t23 (jalli/check :tensor t23))))
+  (testing "humanize joins an explain result into one string"
+    (is (string? (jalli/humanize (jalli/explain :tensor bad-dtype))))
+    (is (nil? (jalli/humanize nil)))))
