@@ -205,3 +205,67 @@ TEST_CASE("reluBackward = dy * (x > 0); kink at 0 maps to 0") {
   CHECK(v[2] == doctest::Approx(0.0f));     // x=0 -> relu'(0):=0
   CHECK(v[3] == doctest::Approx(10.0f));
 }
+
+// --- softmax (row-wise) + its coupled backward ------------------------------
+// The first op whose backward is NOT elementwise: every output in a row depends on
+// every input in that row, so the vjp is a row reduction, not a diagonal scale.
+// Contract: softmax(xId, rows, cols) treats the buffer as rows x cols row-major and
+// applies softmax along each row (subtract the row max first for numerical stability,
+// then exp / rowsum). softmaxBackward(sId, dyId, rows, cols) takes the FORWARD OUTPUT
+// s (not x) and the upstream dy, and returns dx_i = s_i (dy_i - sum_j dy_j s_j) --
+// i.e. dx = s * (dy - rowdot), where rowdot is the per-row dot(dy, s) broadcast.
+// (Signature shown as (id, rows, cols); adapt if you carry shape differently.)
+//
+// Uncomment once softmax + softmaxBackward land in jabla.hpp. Reference values are
+// PyTorch's softmax([1,2,3]) = [.0900, .2447, .6652].
+TEST_CASE("softmax: row sums to 1; reference softmax([1,2,3])") {
+  clearTensors();
+  int x = createTensor({1.0f, 2.0f, 3.0f});       // 1 row x 3 cols
+  auto v = getTensor(softmax(x, 1, 3));
+  REQUIRE(v.size() == 3);
+  CHECK(v[0] + v[1] + v[2] == doctest::Approx(1.0f));   // normalized
+  CHECK(v[0] == doctest::Approx(0.0900f).epsilon(0.01));
+  CHECK(v[1] == doctest::Approx(0.2447f).epsilon(0.01));
+  CHECK(v[2] == doctest::Approx(0.6652f).epsilon(0.01));
+}
+
+// Stability: softmax([1001,1002,1003]) must equal softmax([1,2,3]) -- the row-max
+// subtraction is what prevents exp() overflow. This is the test that catches a
+// kernel that forgot to subtract the max.
+TEST_CASE("softmax: shift-invariant (row-max subtraction prevents overflow)") {
+  clearTensors();
+  int x = createTensor({1001.0f, 1002.0f, 1003.0f});
+  auto v = getTensor(softmax(x, 1, 3));
+  REQUIRE(v.size() == 3);
+  CHECK(v[0] == doctest::Approx(0.0900f).epsilon(0.01));
+  CHECK(v[2] == doctest::Approx(0.6652f).epsilon(0.01));
+}
+
+// Two rows at once: confirms the reduction is PER ROW, not over the whole buffer.
+TEST_CASE("softmax: independent per row") {
+  clearTensors();
+  int x = createTensor({1.0f, 2.0f, 3.0f,
+                        3.0f, 2.0f, 1.0f});         // 2 rows x 3 cols
+  auto v = getTensor(softmax(x, 2, 3));
+  REQUIRE(v.size() == 6);
+  CHECK(v[0] + v[1] + v[2] == doctest::Approx(1.0f));
+  CHECK(v[3] + v[4] + v[5] == doctest::Approx(1.0f));
+  CHECK(v[5] == doctest::Approx(0.0900f).epsilon(0.01));  // row 1 is row 0 reversed
+}
+//
+// // Backward oracle: s = softmax([1,2,3]) = [.0900, .2447, .6652], dy = [1, 0, 0].
+// // rowdot = dot(dy, s) = .0900. dx = s * (dy - rowdot):
+// //   dx0 = .0900 * (1 - .0900) =  .0819
+// //   dx1 = .2447 * (0 - .0900) = -.0220
+// //   dx2 = .6652 * (0 - .0900) = -.0599
+// // (Note it takes s, the forward output, not x -- the kernel saves a recompute.)
+TEST_CASE("softmaxBackward = s * (dy - rowdot(dy, s))") {
+  clearTensors();
+  int s  = createTensor({0.0900f, 0.2447f, 0.6652f});  // a softmax row
+  int dy = createTensor({1.0f, 0.0f, 0.0f});
+  auto v = getTensor(softmaxBackward(s, dy, 1, 3));
+  REQUIRE(v.size() == 3);
+  CHECK(v[0] == doctest::Approx(0.0819f).epsilon(0.02));
+  CHECK(v[1] == doctest::Approx(-0.0220f).epsilon(0.02));
+  CHECK(v[2] == doctest::Approx(-0.0599f).epsilon(0.02));
+}

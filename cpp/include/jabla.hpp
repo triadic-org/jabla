@@ -1,7 +1,8 @@
 #pragma once
-#include <vector>
-#include <cmath>
+#include <algorithm>
 #include <cblas.h>
+#include <cmath>
+#include <vector>
 
 // Native backend for jabla.tensor: the buffer registry plus the ops (matmul,
 // ...). One header for now; split (jabla_nn, jabla_cuda, ...) once the
@@ -111,8 +112,10 @@ namespace jabla {
   // (Exact-erf GELU is an alternative -- switch the body if validating vs nn.GELU().)
   inline int gelu(int xId) {
     const std::vector<float>& x = tensors.at(xId);
+
     std::vector<float> y(x.size());
     const float s = 0.7978845608028654f;  // sqrt(2/pi)
+
     for (std::size_t i = 0; i < y.size(); ++i) {
       float xi = x[i];
       float inner = s * (xi + 0.044715f * xi * xi * xi);
@@ -127,8 +130,10 @@ namespace jabla {
   inline int geluBackward(int xId, int dyId) {
     const std::vector<float>& x = tensors.at(xId);
     const std::vector<float>& dy = tensors.at(dyId);
+
     std::vector<float> dx(x.size());
     const float s = 0.7978845608028654f;  // sqrt(2/pi)
+
     for (std::size_t i = 0; i < dx.size(); ++i) {
       float xi = x[i];
       float inner = s * (xi + 0.044715f * xi * xi * xi);
@@ -136,6 +141,48 @@ namespace jabla {
       float dinner = s * (1.0f + 0.134145f * xi * xi);  // 0.134145 = 3 * 0.044715
       float dgelu = 0.5f * (1.0f + t) + 0.5f * xi * (1.0f - t * t) * dinner;
       dx[i] = dy[i] * dgelu;
+    }
+    return createTensor(std::move(dx));
+  }
+
+  inline int softmax(int xId, int rows, int cols) {
+    const std::vector<float>& x = tensors.at(xId);
+    std::vector<float> y(x.size());
+
+    for (int r = 0; r < rows; ++r) {
+      const float* xr = x.data() + r * cols;
+      float* yr = y.data() + r * cols;
+
+      float row_max = *std::max_element(xr, xr + cols); 
+      float row_sum = 0.0f; 
+
+      // Subtract row max from exp(value), sum results
+      for (int c = 0; c < cols; ++c) {
+        yr[c] = std::exp(xr[c] - row_max);
+        row_sum += yr[c];
+      }
+      for (int c = 0; c < cols; ++c)  yr[c] /= row_sum;
+    }
+    return createTensor(std::move(y));
+  }
+
+  // sId = softmax tensor
+  // dyId = grad out tensor
+  inline int softmaxBackward(int sId, int dyId, int rows, int cols) {
+    const std::vector<float>& s = tensors.at(sId);
+    const std::vector<float>& dy = tensors.at(dyId);
+
+    std::vector<float> dx(s.size());
+
+    // Compute rowdot
+    for (int r = 0; r < rows; ++r) {
+      const float* sr = s.data() + r * cols;
+      const float* dyr = dy.data() + r * cols;
+      float* dxr = dx.data() + r * cols;
+      float dot = 0.0f;
+
+      for (int c = 0; c < cols; ++c) dot += sr[c] * dyr[c];
+      for (int c = 0; c < cols; ++c) dxr[c] = sr[c] * (dyr[c] - dot);
     }
     return createTensor(std::move(dx));
   }
