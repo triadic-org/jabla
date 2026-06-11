@@ -279,7 +279,7 @@
              [(relu-backward-raw x grad-out)]))  ; dx = grad-out * relu'(x)
 
    :softmax (fn [node grad-out]
-              (softmax-backward-raw node grad-out))
+              [(softmax-backward-raw node grad-out)])  ; one input (the logits)
    })
 
 (defn ones-from-shape
