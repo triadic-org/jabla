@@ -32,7 +32,7 @@
 (def ops
   "Allowed :op tags: :leaf, or the op that produced the tensor. Grows with the
   op set (add :relu / :softmax / ... as they land)."
-  #{:leaf :matmul :add :mul :gelu})
+  #{:leaf :matmul :add :mul :gelu :relu})
 
 ;; --- Structural schema (the shape of a tensor MAP) --------------------------
 

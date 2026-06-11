@@ -90,19 +90,55 @@ jabla.jalli   (schema-as-data + defmulti -problems + validate/explain/humanize/c
 
 ## Using it at an op boundary
 
-This is now wired into `jabla.tensor`'s public forwards (DONE):
+Two ways, both in use. The low-level form is an inline `check`:
 
 ```clojure
-(defn matmul [t1 t2] (jalli/check [:matmul] [t1 t2]) ...)      ; clear error, not a segfault
-(defn add    [t1 t2] (jalli/check [:same-shape] [t1 t2]) ...)
-(defn mul    [t1 t2] (jalli/check [:same-shape] [t1 t2]) ...)
-(defn gelu   [t]     (jalli/check :tensor t) ...)
-(defn relu   [t]     (jalli/check :tensor t) ...)
+(defn matmul [t1 t2] (jalli/check [:matmul] [t1 t2]) ...)   ; clear error, not a segfault
 ```
+
+The preferred form puts the contract **on the definition** via `defn-checked` (below):
+
+```clojure
+(jalli/defn-checked matmul
+  "..."                              ; docstring (optional, like defn)
+  {:args [:matmul] :ret :tensor}     ; the contract: args-vector schema + return schema
+  [t1 t2]
+  (->node (matmul-raw t1 t2 false false) :matmul [t1 t2]))
+```
+
+All five `jabla.tensor` forwards use `defn-checked` now:
+
+| op | `:args` | `:ret` |
+|---|---|---|
+| `matmul` | `[:matmul]` (2 rank-2 tensors, inner dims match) | `:tensor` |
+| `add` / `mul` | `[:same-shape]` (2 equal-shape tensors) | `:tensor` |
+| `gelu` / `relu` | `[:tuple :tensor]` (1 tensor) | `:tensor` |
 
 Kept opt-in by being on the public forwards only -- the `-raw` kernels used in the hot
 backward path are NOT checked; it can be flagged or compiled off later. The shape checks
 are the high-value ones -- a bad shape otherwise reads past a C++ buffer.
+
+## `defn-checked` -- the function-contract layer
+
+`defn-checked` is jalli's answer to "validate a function's input AND output," the way
+plumatic `s/defn :-`, clojure.spec `s/fdef`, and guardrails `>defn` do on the JVM (none
+of which load on jank). It's a thin macro -- the only one in jalli -- so the available
+jank primitives (defmacro + the data engine) are enough:
+
+```clojure
+(jalli/defn-checked name docstring? {:args <schema> :ret <schema>} [params] body...)
+```
+
+- `:args` validates the **vector of argument values** -- which is why a *relation* over
+  the args (`[:matmul]`, `[:same-shape]`) fits, as does `[:tuple ...]` positionally.
+- `:ret` validates the return value.
+- Both keys optional; each expands to a `jalli/check` (throws on violation) -- `:args`
+  before the body, `:ret` after.
+
+Deliberately minimal: single arity, plain-symbol params (no destructuring / `& rest` /
+multi-arity). jabla's ops fit; lift it if an op needs more. clj-kondo lints it as `defn`
+(the contract map lands in defn's attr-map slot) via a one-line `:lint-as` in
+`.clj-kondo/config.edn`.
 
 ## Extending: the next tags
 
@@ -110,8 +146,6 @@ Driven by real op-boundary needs, roughly in order:
 
 - `[:tensor {:dtype :f32 :shape [m n]}]` -- a leaf with **props**: constrain dtype and/or
   an exact/partial shape, not just "is a tensor".
-- `[:tuple s1 s2 ...]` -- positional: each element of a vector value matches its schema.
-  Generalizes the `pair-problems` 2-tuple handling behind `:matmul` / `:same-shape`.
 - `[:fn pred]` -- escape hatch: an arbitrary predicate. (malli has this; it is how every
   dependent check ultimately bottoms out.)
 
@@ -124,10 +158,11 @@ that day comes, the swap is mechanical because the surface already matches:
 
 | jalli | malli |
 |---|---|
-| `[:and ...]`, `[:tensor]`, `[:fn p]` | same vector grammar |
+| `[:and ...]`, `[:tensor]`, `[:tuple ...]` | same vector grammar |
 | `validate` / `explain` | `m/validate` / `m/explain` |
 | `humanize` | `me/humanize` |
 | `-problems` defmethod per tag | `m/-IntoSchema` + `-validator` |
+| `defn-checked` `{:args .. :ret ..}` | `[:=>]` schema + `malli.instrument` (or guardrails `>defn`) |
 
 Schemas (the data) would largely carry over; only the engine (defmulti -> protocols) and
 the leaf predicates' wiring change. The dependent-shape predicates remain custom code in
@@ -136,7 +171,8 @@ either world.
 ## Status
 
 Landed and green on jank: `src/jabla/jalli.jank` + `test/jabla/jalli_test.jank` (in the
-`make test` runner). Tags `:tensor`, `:and`, `:matmul`, `:same-shape`. **Wired into all
-five `jabla.tensor` public forwards** (matmul / add / mul / gelu / relu); the throw path
-is pinned by `op-boundary-guards` in `tensor_test.jank`. Suite: 61 tests / 153 assertions.
-Next: leaf props (`[:tensor {:shape ...}]`) and `[:tuple ...]` as new ops need them.
+`make test` runner). Tags `:tensor`, `:and`, `:matmul`, `:same-shape`, `:tuple`, plus the
+`defn-checked` contract macro. **All five `jabla.tensor` public forwards** (matmul / add /
+mul / gelu / relu) declare their input/output contract via `defn-checked`; the throw path
+is pinned by `op-boundary-guards` in `tensor_test.jank`. Suite: 63 tests / 160 assertions.
+Next: leaf props (`[:tensor {:shape ...}]`) and `[:fn pred]` as new ops need them.

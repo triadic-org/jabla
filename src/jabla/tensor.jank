@@ -156,15 +156,15 @@
         t3-id (cpp/jabla.matmul (:id t1) (:id t2) m n k transA transB)]
     {:shape [m n] :dtype (get-dtype t1) :id t3-id}))
 
-(defn matmul
+(jalli/defn-checked matmul
   "a (m x k) . b (k x n) -> (m x n), the plain matrix product. The public forward
   op: a node-free matmul-raw (no transposes) tagged as a :matmul node over [t1 t2].
   vjp (vjp-rules) is two transposed matmul-raws of the upstream gradient with a and b
   (dA = grad . Bt, dB = At . grad), routed back through the same kernel via CblasTrans.
-  Guards the boundary with jalli (both rank-2 tensors, inner dims match) so a bad shape
-  throws a clear error instead of reading past a cblas buffer."
+  Contract: args must be two rank-2 tensors with matching inner dims (else a bad shape
+  reads past a cblas buffer); the result is a tensor."
+  {:args [:matmul] :ret :tensor}
   [t1 t2]
-  (jalli/check [:matmul] [t1 t2])
   (->node (matmul-raw t1 t2 false false) :matmul [t1 t2]))
 
 (defn add-raw
@@ -176,13 +176,13 @@
   (let [t3-id (cpp/jabla.add (:id t1) (:id t2))]
     {:shape (get-shape t1) :dtype (get-dtype t1) :id t3-id}))
 
-(defn add
+(jalli/defn-checked add
   "Elementwise a + b, the public forward op: a node-free add-raw tagged as an :add
   node over [t1 t2]. vjp (vjp-rules) passes the gradient straight through to both
   inputs (with broadcasting, later, sum it back down to each input's shape).
-  Guards the boundary with jalli (both tensors, equal shapes)."
+  Contract: two equal-shape tensors in, a tensor out."
+  {:args [:same-shape] :ret :tensor}
   [t1 t2]
-  (jalli/check [:same-shape] [t1 t2])
   (->node (add-raw t1 t2) :add [t1 t2]))
 
 (defn- mul-raw
@@ -191,12 +191,12 @@
   [t1 t2]
   {:shape (get-shape t1) :dtype (get-dtype t1) :id (cpp/jabla.mul (:id t1) (:id t2))})
 
-(defn mul
+(jalli/defn-checked mul
   "Elementwise a * b (Hadamard product -- NOT matmul). Public forward op tagged :mul
   over [t1 t2]. vjp: dA = grad * b, dB = grad * a (each an elementwise mul-raw).
-  Guards the boundary with jalli (both tensors, equal shapes)."
+  Contract: two equal-shape tensors in, a tensor out."
+  {:args [:same-shape] :ret :tensor}
   [t1 t2]
-  (jalli/check [:same-shape] [t1 t2])
   (->node (mul-raw t1 t2) :mul [t1 t2]))
 
 (defn- gelu-raw
@@ -211,20 +211,22 @@
   {:shape (get-shape x) :dtype (get-dtype x)
    :id (cpp/jabla.geluBackward (:id x) (:id grad-out))})
 
-(defn gelu
+(jalli/defn-checked gelu
   "GELU activation (tanh approximation), the public forward op tagged :gelu over [t].
-  vjp: dx = grad-out * gelu'(x) via the fused geluBackward kernel."
+  vjp: dx = grad-out * gelu'(x) via the fused geluBackward kernel.
+  Contract: a tensor in, a tensor out."
+  {:args [:tuple :tensor] :ret :tensor}
   [t]
-  (jalli/check :tensor t)
   (->node (gelu-raw t) :gelu [t]))
 
 (defn- relu-raw
   [t]
   {:shape (get-shape t) :dtype (get-dtype t) :id (cpp/jabla.relu (:id t))})
 
-(defn relu
+(jalli/defn-checked relu
+  "ReLU activation max(0, x). Contract: a tensor in, a tensor out."
+  {:args [:tuple :tensor] :ret :tensor}
   [t]
-  (jalli/check :tensor t)
   (->node (relu-raw t) :relu [t]))
 
 (defn relu-backward-raw

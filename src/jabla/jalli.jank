@@ -93,6 +93,17 @@
   ;; tensors AND equal shapes. (Relaxes to broadcastable? once broadcasting lands.)
   (pair-problems value schema/same-shape? "shapes must be equal"))
 
+(defmethod -problems :tuple [schema value]
+  ;; Positional: `value` is a vector whose i-th element matches the i-th child schema.
+  ;; The general arg-vector schema -- e.g. a unary op's args are [:tuple :tensor], a
+  ;; binary op's are [:tuple :tensor :tensor] (or a relation like :matmul over the pair).
+  (let [schemas (schema-children schema)]
+    (if-not (and (vector? value) (= (count value) (count schemas)))
+      [(str ":tuple expects a " (count schemas) "-vector, got " value)]
+      (reduce (fn [acc [s v]] (into acc (-problems s v)))
+              []
+              (map vector schemas value)))))
+
 (defmethod -problems :default [schema _value]
   (throw (ex-info (str "jalli: unknown schema tag " (schema-tag schema))
                   {:schema schema})))
@@ -128,3 +139,35 @@
     (if (seq ps)
       (throw (ex-info (str "jalli: " (humanize ps)) {:schema schema :problems (into [] ps)}))
       value)))
+
+;; --- defn-checked: declare an op's input/output contract on the defn ----------
+;; A >defn-style wrapper (cf. plumatic schema's `s/defn :-`, guardrails `>defn`): the
+;; contract rides on the definition instead of an inline (check ...). `contract` is a
+;; literal map, both keys optional:
+;;   :args  a schema for the VECTOR of argument values -- a relation over the args like
+;;          [:matmul] / [:same-shape], or [:tuple s ...] positionally (e.g. a unary op's
+;;          args are [:tuple :tensor]).
+;;   :ret   a schema for the return value (e.g. :tensor).
+;; Args are validated before the body, the return after -- both via `check` (throws on
+;; violation). An optional docstring may precede the contract, like defn.
+;;
+;; Deliberately minimal -- jabla's ops are fixed-arity, plain-symbol argvecs: single
+;; arity, no destructuring / & rest / multi-arity. (clj-kondo lints it via :lint-as
+;; clojure.core/defn -- the contract map sits in defn's attr-map slot, so arglist + body
+;; are analyzed normally; see .clj-kondo/config.edn.)
+(defmacro defn-checked
+  [nm & more]
+  (let [has-doc  (string? (first more))
+        doc      (when has-doc (first more))
+        more2    (if has-doc (rest more) more)
+        contract (first more2)
+        argv     (second more2)
+        body     (drop 2 more2)
+        args-schema (:args contract)
+        ret-schema  (:ret contract)
+        rsym        (gensym "ret")]
+    `(defn ~nm ~@(when doc [doc]) ~argv
+       ~@(when args-schema [`(check ~args-schema [~@argv])])
+       (let [~rsym (do ~@body)]
+         ~@(when ret-schema [`(check ~ret-schema ~rsym)])
+         ~rsym))))

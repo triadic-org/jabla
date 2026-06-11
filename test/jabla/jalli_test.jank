@@ -51,3 +51,34 @@
   (testing "humanize joins an explain result into one string"
     (is (string? (jalli/humanize (jalli/explain :tensor bad-dtype))))
     (is (nil? (jalli/humanize nil)))))
+
+(deftest tuple-positional
+  (testing ":tuple -- positional, i-th element matches i-th child schema"
+    (is (jalli/validate [:tuple :tensor] [t23]))               ; unary arg-vector
+    (is (jalli/validate [:tuple :tensor :tensor] [t23 t34])))  ; binary arg-vector
+  (testing ":tuple rejects wrong arity and a bad element"
+    (is (not (jalli/validate [:tuple :tensor] [t23 t34])))     ; arity 1 != 2
+    (is (not (jalli/validate [:tuple :tensor] [bad-dtype])))))
+
+;; --- defn-checked: the contract rides on the definition ----------------------
+;; identity-tensor returns its arg (a valid tensor); strip-op returns a non-tensor,
+;; to exercise the :ret check independently of the :args check.
+(jalli/defn-checked identity-tensor
+  "Returns its tensor arg unchanged."
+  {:args [:tuple :tensor] :ret :tensor}
+  [t]
+  t)
+
+(jalli/defn-checked strip-op
+  "Drops :op, so the return is NOT a well-formed tensor."
+  {:ret :tensor}
+  [t]
+  (dissoc t :op))
+
+(deftest defn-checked-contract
+  (testing "valid args + valid return pass straight through"
+    (is (= t23 (identity-tensor t23))))
+  (testing "a bad argument throws (before the body)"
+    (is (thrown? :default (identity-tensor bad-dtype))))
+  (testing "a bad return throws (after the body)"
+    (is (thrown? :default (strip-op t23)))))

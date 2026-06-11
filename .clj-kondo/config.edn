@@ -4,7 +4,12 @@
 ;; `clj` (see `make lint`, which mirrors .jank -> .clj for project-wide analysis).
 ;; This config silences the false positives that come from jank-specific features
 ;; clj-kondo doesn't model. Tighten/loosen as the codebase grows.
-{:linters
+{;; jalli/defn-checked is a >defn-style macro: (name docstring? contract argv & body).
+ ;; Its contract map lands in defn's attr-map slot, so defn's grammar fits exactly --
+ ;; lint it as defn so the arglist + body are analyzed normally.
+ :lint-as {jabla.jalli/defn-checked clojure.core/defn}
+
+ :linters
  {;; `cpp/` is jank's reserved C++ interop namespace — not a real Clojure ns, so
   ;; clj-kondo can't resolve it. Exclude it (covers cpp/new, cpp/cast, etc.).
   :unresolved-namespace {:exclude [cpp]}
