@@ -191,23 +191,20 @@
   [t1 t2]
   (->node (mul-raw t1 t2) :mul [t1 t2]))
 
-(defn- gelu-raw
-  "GELU activation (tanh approximation, matching nanoGPT new_gelu / llm.c) via
-  cpp/jabla.gelu. Bare tensor (no :op/:inputs); the gelu forward records the node."
+(defn gelu
+  "GELU activation (tanh approximation), the public forward op tagged :gelu over [t].
+  vjp: dx = grad-out * gelu'(x) via the fused geluBackward kernel."
   [t]
-  {:shape (get-shape t) :dtype (get-dtype t) :id (cpp/jabla.gelu (:id t))})
+  (->node
+   {:shape (get-shape t) :dtype (get-dtype t) :id (cpp/jabla.gelu (:id t))}
+   :gelu
+   [t]))
 
 (defn- gelu-backward-raw
   "Fused gelu vjp: dx = grad-out * gelu'(x), via cpp/jabla.geluBackward. Bare tensor."
   [x grad-out]
   {:shape (get-shape x) :dtype (get-dtype x)
    :id (cpp/jabla.geluBackward (:id x) (:id grad-out))})
-
-(defn gelu
-  "GELU activation (tanh approximation), the public forward op tagged :gelu over [t].
-  vjp: dx = grad-out * gelu'(x) via the fused geluBackward kernel."
-  [t]
-  (->node (gelu-raw t) :gelu [t]))
 
 (defn- relu-raw
   [t]
@@ -219,8 +216,24 @@
 
 (defn relu-backward-raw
   [x grad-out]
-  {:shape (get-shape x) :dtype (get-dtype x)
+  {:shape (get-shape x)
+   :dtype (get-dtype x)
    :id (cpp/jabla.reluBackward (:id x) (:id grad-out))})
+
+(defn softmax
+  [t]
+  (let [[rows cols :as shape] (get-shape t)]
+    (->node
+     {:shape shape :dtype (get-dtype t) :id (cpp/jabla.softmax (:id t) rows cols)}
+     :softmax
+     [t])))
+
+(defn softmax-backward-raw
+  [node grad-out]
+  (let [[rows cols :as shape] (get-shape node)] 
+   {:shape shape
+    :dtype (get-dtype node)
+    :id (cpp/jabla.softmaxBackward (:id node) (:id grad-out) rows cols)}))
 
 ;; TODO(you): the remaining GPT op set, each = forward (records its node) + a vjp
 ;; rule, validated vs PyTorch: relu, softmax, layernorm, embedding, cross-entropy.
@@ -264,6 +277,9 @@
    :relu (fn [node grad-out]
            (let [[x] (:inputs node)]
              [(relu-backward-raw x grad-out)]))  ; dx = grad-out * relu'(x)
+
+   :softmax (fn [node grad-out]
+              (softmax-backward-raw node grad-out))
    })
 
 (defn ones-from-shape

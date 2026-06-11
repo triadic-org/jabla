@@ -387,19 +387,17 @@
 ;; has the same trap.)
 (deftest softmax-forward
   (testing "softmax: row sums to 1; reference softmax([1,2,3]) = [.0900 .2447 .6652]"
-    ;; (let [c (tt/->vectors (tt/softmax (tt/->tensor [[1.0 2.0 3.0]])))]
-    ;;   (is (tu/approx? 1.0    (+ (get-in c [0 0]) (get-in c [0 1]) (get-in c [0 2])) 1e-5))
-    ;;   (is (tu/approx? 0.0900 (get-in c [0 0]) 1e-3))
-    ;;   (is (tu/approx? 0.2447 (get-in c [0 1]) 1e-3))
-    ;;   (is (tu/approx? 0.6652 (get-in c [0 2]) 1e-3)))
-    (is true)))
+    (let [c (tt/->vectors (tt/softmax (tt/->tensor [[1.0 2.0 3.0]])))]
+      (is (tu/approx? 1.0    (+ (get-in c [0 0]) (get-in c [0 1]) (get-in c [0 2])) 1e-5))
+      (is (tu/approx? 0.0900 (get-in c [0 0]) 1e-3))
+      (is (tu/approx? 0.2447 (get-in c [0 1]) 1e-3))
+      (is (tu/approx? 0.6652 (get-in c [0 2]) 1e-3)))))
 
 (deftest softmax-backward
   (testing "softmax gradients vs finite differences (weighted-sum objective -- see note)"
-    ;; (let [c (tt/->tensor [[0.3 0.5 0.2] [0.1 0.8 0.6]])]   ; fixed non-uniform weights
-    ;;   (is (tu/tensor-grad-check (fn [[x]] (tt/mul (tt/softmax x) c))
-    ;;                             [[[1.0 2.0 3.0] [0.5 1.5 2.5]]])))
-    (is true)))
+    (let [c (tt/->tensor [[0.3 0.5 0.2] [0.1 0.8 0.6]])]   ; fixed non-uniform weights
+      (is (tu/tensor-grad-check (fn [[x]] (tt/mul (tt/softmax x) c))
+                                [[[1.0 2.0 3.0] [0.5 1.5 2.5]]])))))
 
 ;; cross-entropy: the loss. CE(logits, target) = -log(softmax(logits)[target]), averaged
 ;; over N rows. Output is a SCALAR. vjp (the clean fused form): dlogits =
