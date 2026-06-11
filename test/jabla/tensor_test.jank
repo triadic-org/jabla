@@ -339,8 +339,22 @@
 
 ;; --- Op set: ops you'll implement (relu, softmax, layernorm, cross-entropy, embedding)
 ;; Each = a C++ kernel + a jank forward (records :op/:inputs via a *-raw) + a vjp rule +
-;; these tests, uncommented as you go. Suggested order: relu (warmup) -> softmax (the
-;; coupled reduction) -> cross-entropy (uses softmax) -> layernorm -> embedding.
+;; these tests, uncommented as you go.
+;;
+;; Order is sequenced by NEAREST validator, not by op difficulty -- the goal is to reach
+;; "one attention block, validated element-wise vs PyTorch" (the Step 3 finish) fast,
+;; because that block is the cheapest end-to-end test of the whole DAG + backward engine:
+;;   1. relu (warmup -- DONE)
+;;   2. softmax (the coupled reduction -- attention core)
+;;   3. layernorm (reuses softmax's row-reduction machinery; pre-norm in the block)
+;;   4. the engine work the block forces: batched/N-D matmul (vjp differs from the 2-D
+;;      rule -- see engine-design.md), a causal mask, and broadcast/scalar-scale for
+;;      1/sqrt(d_k) + the layernorm affine. THIS is where to "go wide" (the seam is
+;;      load-bearing for the GPU/backend stage); softmax/layernorm stay just-enough.
+;;   --> assemble + validate the attention block here (Step 3 done).
+;;   5. cross-entropy (the loss -- uses softmax) and embedding (the input layer) come
+;;      AFTER: they gate the trainable GPT (Step 4), not the block, so they're deferred,
+;;      not skipped. cross-entropy still needs softmax first.
 ;; Two gotchas below are worth reading BEFORE you start: the softmax grad-check note
 ;; (applies to layernorm too) and the embedding one.
 

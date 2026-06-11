@@ -90,17 +90,36 @@ Each op = forward (records `:op`/`:inputs` via a `*-raw` kernel) + a vjp rule + 
 Split settled: assistant does the mechanical copies, user does the learning ones.
 - **Done (assistant): `mul`, `gelu`.** Elementwise; C++ kernels (`mul`, `gelu` tanh
   approx + fused `geluBackward`) + jank forwards + `:mul`/`:gelu` vjp rules + tests.
-  cpp-test verified locally; jank grad-checks green on devbox.
-- **In progress (user): `relu`, `softmax`, `layernorm`, `cross-entropy`, `embedding`.**
-  Test targets are **scaffolded** in `tensor_test.jank` (commented, uncomment-as-you-go)
-  with forward reference values, vjp shapes, and the gotchas baked in -- notably: the
-  softmax/layernorm grad-check is VACUOUS under plain `sum` (rows sum to 1 / to beta) ->
-  weight the output (`(mul (softmax x) C)`); relu non-diff at 0; embedding indices
-  aren't differentiable (hand-oracle the scatter-add). Suggested order: relu -> softmax
-  -> cross-entropy -> layernorm -> embedding.
-- **Then** assemble **one attention block** + validate element-wise vs PyTorch (the
-  Step 3 row's validator). Watch for batched/N-D matmul (attention) -- its vjp differs
-  from the 2-D rule.
+- **Done (user): `relu`.** `relu` + `reluBackward` C++ kernels (kink `relu'(0):=0`) +
+  forward/backward/no-alias doctests (`cpp/test/jabla_test.cpp`); jank scaffold ready.
+- **Sequencing (re-decided 2026-06-10): order by NEAREST validator, not op difficulty.**
+  Goal = reach "one attention block validated element-wise vs PyTorch" (Step 3 finish)
+  fast -- the cheapest end-to-end test of the DAG + backward engine. Reframe: all
+  remaining ops are on GPT's critical path (no wide-vs-deep tension *among them*); they
+  split by *which* milestone they gate.
+    1. `softmax` (coupled reduction -- attention core; also used by cross-entropy) <- NEXT
+    2. `layernorm` (reuses softmax's row-reduction machinery; pre-norm)
+    3. the engine work the block forces -- **this is where to "go wide"**: batched/N-D
+       matmul (vjp differs from the 2-D rule), a causal mask, broadcast/scalar-scale
+       (1/sqrt(d_k) + layernorm affine). softmax/layernorm themselves stay just-enough.
+    --> assemble + validate the attention block (Step 3 done).
+    4. `cross-entropy` (loss; needs softmax) + `embedding` (input layer) come AFTER --
+       they gate the trainable GPT (Step 4), NOT the block, so deferred, not skipped.
+  Scaffolds (commented, uncomment-as-you-go): jank targets in `tensor_test.jank` (all
+  five ops); C++ doctests through `softmax`/`softmaxBackward` in `jabla_test.cpp`.
+  Gotchas baked in: softmax/layernorm grad-check is VACUOUS under plain `sum` (rows sum
+  to 1 / to beta) -> weight the output (`(mul (softmax x) C)`); embedding indices aren't
+  differentiable (hand-oracle the scatter-add).
+- **Future-proofing checked (2026-06-10): the GPT-first sequence forecloses no future
+  architecture (GANs/RL/meta-learning).** Those stress autograd *topology*, a different
+  axis from the forward-op/shape work on the GPT path. Deferred axes now captured in
+  `engine-design.md` ("Deferred axes" table): `detach` (cheap future op), multiple-
+  backward-from-different-roots (already supported -- stateless `backward!`), conv (just
+  another registry op). The ONE real watch-item is **double-backward (`create_graph`)**
+  for WGAN-GP/MAML: today's vjps route through node-free `*-raw`, so grads aren't
+  differentiable. Not foreclosed (flip vjps to node-recording under a flag, PyTorch-
+  style); guardrail: never let "a grad tensor has no `:op`/`:inputs`" become load-bearing,
+  and keep `-raw`-vs-node-recording a swappable choice.
 
 ## Other tracks / open threads
 - **Engine stages (perf/scale; see `engine-design.md`):** `arena/free` (registry never

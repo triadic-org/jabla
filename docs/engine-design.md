@@ -64,6 +64,27 @@ Orthogonal storage/kernel refactors slot in when needed: bf16/fp16 dtype, batche
 / N-D matmul (attention is batched over (batch, heads, seq, dim) and its vjp differs
 from the 2-D rule), and a `detach` op for GAN / actor-critic.
 
+### Deferred axes (known doors, not walls)
+
+These are *not* on the GPT critical path, so they're deliberately not built yet --
+but each is something a future architecture (GANs, RL, meta-learning) will want, and
+the point of recording them is that the node-on-tensor + vjp-as-data substrate keeps
+every one a **door** (add an op / flip a flag) rather than a **wall** (re-architect).
+The guardrails below cost nothing today; their only job is to stop an assumption from
+quietly ossifying against them.
+
+| Axis | Who needs it | Status / unlock | Guardrail to keep it open |
+|---|---|---|---|
+| **`detach` / stop-gradient** | GANs (detach fakes for the D step), actor-critic (detach the value target) | A future op: result is a fresh `:leaf` that drops its `:inputs` edge, so `backward!` stops there. Orthogonal to every other op. | Nothing special -- the DAG already cuts cleanly at a `:leaf`. |
+| **Double-backward (`create_graph`)** | WGAN-GP / R1 gradient penalty, MAML / meta-learning -- anything that puts a gradient *inside* the loss | The vjp rules currently route through node-free `*-raw` kernels, so **grads are not themselves differentiable**. Unlock: let the vjps optionally route through the *node-recording* ops (so grad tensors carry their own `:op`/`:inputs`), under a `create-graph` flag -- PyTorch's exact move. The representation already supports it. | (1) Never let "a grad tensor has no `:op`/`:inputs`" become load-bearing anywhere (`backward!`, `get-grad`, future arena/lazy code). (2) Treat "vjp uses `-raw` vs node-recording op" as a swappable choice, not an invariant. This is tension #7 made concrete. |
+| **Multiple backward from different roots** | GANs (separate D-loss / G-loss), any multi-objective setup | **Already supported** -- `backward!` is stateless and returns a grads map; the DAG is a persistent value, so calling backward from two roots Just Works. | -- (a property of the no-global-tape decision; don't add global state that breaks it.) |
+| **New layer kernels (conv, etc.)** | DCGAN and most non-transformer nets | Each is just another op = forward (`-raw` + record) + a vjp rule in the registry. The engine never changes. | -- (this *is* the extensibility the vjp-as-data registry buys.) |
+
+The throughline: GANs/RL stress the autograd **topology** (how many backward passes,
+which edges are cut), which is a different axis from the forward-op + shape work on
+the GPT path -- so the GPT-first op sequence forecloses none of them, *provided* the
+double-backward guardrails above hold.
+
 ## The fault line
 
 Almost every tension is the same collision: **a functional / immutable front end
