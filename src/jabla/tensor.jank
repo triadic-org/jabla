@@ -139,20 +139,20 @@
 
 (defn- matmul-raw
   "Trans-capable matrix product over the registry: op(t1) . op(t2), where op(x) is
-  x or its transpose per transA/transB. Computes via the native cblas_sgemm kernel
+  x or its transpose per trans-a/trans-b. Computes via the native cblas_sgemm kernel
   (cpp/jabla.matmul), which reads the transposed operands in place (CblasTrans) --
   no materialized transpose. Derives the operation dims m/n/k AND the result shape
   from the *stored* shapes and the flags (op(t1) is m x k, op(t2) is k x n), so a
   transposed operand is read correctly. Returns a bare tensor (no :op/:inputs) --
   this is the raw kernel used both by the matmul forward and by its vjp, so the
   backward passes don't record graph nodes."
-  [t1 t2 transA transB]
+  [t1 t2 trans-a trans-b]
   (let [[a0 a1] (get-shape t1)
         [b0 b1] (get-shape t2)
-        m (if transA a1 a0)
-        k (if transA a0 a1)
-        n (if transB b0 b1)
-        t3-id (cpp/jabla.matmul (:id t1) (:id t2) m n k transA transB)]
+        m (if trans-a a1 a0)
+        k (if trans-a a0 a1)
+        n (if trans-b b0 b1)
+        t3-id (cpp/jabla.matmul (:id t1) (:id t2) m n k trans-a trans-b)]
     {:shape [m n] :dtype (get-dtype t1) :id t3-id}))
 
 (defn matmul
@@ -163,7 +163,7 @@
   [t1 t2]
   (->node (matmul-raw t1 t2 false false) :matmul [t1 t2]))
 
-(defn add-raw
+(defn- add-raw
   "Elementwise a + b (same shape for now; broadcasting later) via the native
   cpp/jabla.add kernel; the result carries a's shape unchanged (add is rank-agnostic,
   unlike matmul). Returns a bare tensor (no :op/:inputs) -- the raw kernel used by the
@@ -181,7 +181,7 @@
 
 (defn- mul-raw
   "Elementwise a * b (Hadamard product), same shape, via cpp/jabla.mul. Bare tensor
-  (no :op/:inputs) -- used by the mul forward and by the :mul and :gelu vjp rules."
+  (no :op/:inputs) -- used by the mul forward and the :mul vjp rule."
   [t1 t2]
   {:shape (get-shape t1) :dtype (get-dtype t1) :id (cpp/jabla.mul (:id t1) (:id t2))})
 
@@ -206,21 +206,27 @@
   {:shape (get-shape x) :dtype (get-dtype x)
    :id (cpp/jabla.gelu_backward (:id x) (:id grad-out))})
 
-(defn- relu-raw
-  [t]
-  {:shape (get-shape t) :dtype (get-dtype t) :id (cpp/jabla.relu (:id t))})
-
 (defn relu
+  "ReLU activation max(0, x), the public forward op tagged :relu over [t].
+  vjp: dx = grad-out * (x > 0) via the relu_backward kernel."
   [t]
-  (->node (relu-raw t) :relu [t]))
+  (->node
+   {:shape (get-shape t) :dtype (get-dtype t) :id (cpp/jabla.relu (:id t))}
+   :relu
+   [t]))
 
-(defn relu-backward-raw
+(defn- relu-backward-raw
+  "relu vjp: dx = grad-out * (x > 0), via cpp/jabla.relu_backward. Bare tensor
+  (no :op/:inputs) -- used by the :relu vjp rule."
   [x grad-out]
   {:shape (get-shape x)
    :dtype (get-dtype x)
    :id (cpp/jabla.relu_backward (:id x) (:id grad-out))})
 
 (defn softmax
+  "Row-wise softmax (numerically stable -- see the kernel), the public forward op
+  tagged :softmax over [t]. The first COUPLED vjp: it consumes this node's OUTPUT s
+  (not its input), dx = s * (grad-out - rowdot); see the :softmax rule."
   [t]
   (let [[rows cols :as shape] (get-shape t)]
     (->node
@@ -228,12 +234,15 @@
      :softmax
      [t])))
 
-(defn softmax-backward-raw
+(defn- softmax-backward-raw
+  "softmax vjp: the coupled row reduction dx = s * (grad-out - rowdot), via
+  cpp/jabla.softmax_backward. Takes `node` = the forward OUTPUT s (softmax saves it
+  rather than recomputing). Bare tensor (no :op/:inputs) -- used by the :softmax rule."
   [node grad-out]
-  (let [[rows cols :as shape] (get-shape node)] 
-   {:shape shape
-    :dtype (get-dtype node)
-    :id (cpp/jabla.softmax_backward (:id node) (:id grad-out) rows cols)}))
+  (let [[rows cols :as shape] (get-shape node)]
+    {:shape shape
+     :dtype (get-dtype node)
+     :id (cpp/jabla.softmax_backward (:id node) (:id grad-out) rows cols)}))
 
 ;; TODO(you): the remaining GPT op set, each = forward (records its node) + a vjp
 ;; rule, validated vs PyTorch: relu, softmax, layernorm, embedding, cross-entropy.

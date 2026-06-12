@@ -74,9 +74,13 @@ not multiple tapes. Full decision + the staged eager→lazy→fused→backend ro
 - **Tensor engine (`jabla.tensor`):** the tensor map IS the node (node-on-tensor;
   no separate `value`). Role names for the *same* map: `t`/`t1`/`t2` generic, `node`
   in the vjp/walk, `root` at backward's entry, `grad`/`grad-out` for gradient tensors.
-  Readers get- (`get-shape`/`get-dtype`/`get-grad`). Node-free kernels suffix `-raw`
-  (`matmul-raw`/`add-raw`); public op = `*-raw` + `(assoc … :op … :inputs …)`. No
-  global tape, so no `reset-tape!`; `backward!` returns the grads map.
+  Readers get- (`get-shape`/`get-dtype`/`get-grad`). The public forward = a kernel
+  call tagged via `(->node raw :op inputs)`. Node-free kernels suffix `-raw`, but
+  **only when reused** (decided 2026-06-11, "minimal"): backward-reused kernels
+  (`matmul-raw`/`add-raw`/`mul-raw`) + the node-free backward producers
+  (`*-backward-raw` feeding vjp rules). Single-use forwards inline the kernel call --
+  no `-raw` -- so a `-raw`'s presence MEANS "reused/node-free-critical". No global
+  tape, so no `reset-tape!`; `backward!` returns the grads map.
 - Comments: one style — `;; --- title ---` + plain `;;` prose (no boxes).
 
 ## Tooling

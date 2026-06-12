@@ -20,9 +20,9 @@ namespace jabla {
   // (the index here). Bulk data never crosses into jank.
   inline std::vector<std::vector<float>> tensors;
 
-  inline int create_tensor(std::vector<float> vector) {
+  inline int create_tensor(std::vector<float> data) {
     int idx = tensors.size();
-    tensors.push_back(std::move(vector));
+    tensors.push_back(std::move(data));
     return idx;
   }
 
@@ -70,7 +70,7 @@ namespace jabla {
     // TODO: validate a and b exist and have correct dimensions
  
     std::vector<float> c(a.size());
-    for(std::size_t i = 0; i < c.size(); ++i) c[i] = a[i] + b[i];
+    for (std::size_t i = 0; i < c.size(); ++i) c[i] = a[i] + b[i];
 
     return create_tensor(std::move(c));
   }
@@ -84,23 +84,29 @@ namespace jabla {
     return create_tensor(std::move(c));
   }
 
+  // relu kernel: elementwise max(0, x). No BLAS -- a plain loop. The ternary
+  // (x > 0 ? x : 0) lowers to the same maxss instruction as std::max but needs
+  // no <algorithm>.
   inline int relu(int x_id) {
     const std::vector<float>& x = tensors.at(x_id);
     std::vector<float> y(x.size());
 
-    for (std::size_t i= 0; i < y.size(); ++i) {
+    for (std::size_t i = 0; i < y.size(); ++i) {
       float xi = x[i];
-      y[i] = xi > 0.0f? xi : 0.0f;
+      y[i] = xi > 0.0f ? xi : 0.0f;
     }
     return create_tensor(std::move(y));
   }
 
+  // relu_backward: the relu vjp -- dx = dy * (x > 0), elementwise. The subgradient
+  // passes the upstream grad where x is positive and kills it where x <= 0
+  // (relu'(0) := 0; the jank grad-check keeps zeros out of its inputs).
   inline int relu_backward(int x_id, int dy_id) {
     const std::vector<float>& x = tensors.at(x_id);
     const std::vector<float>& dy = tensors.at(dy_id);
     std::vector<float> dx(x.size());
 
-    for (std::size_t i = 0; i < dx.size(); ++i){
+    for (std::size_t i = 0; i < dx.size(); ++i) {
       float xi = x[i];
       dx[i] = xi > 0.0f ? dy[i] : 0.0f;
     }
@@ -145,6 +151,9 @@ namespace jabla {
     return create_tensor(std::move(dx));
   }
 
+  // softmax kernel: row-wise softmax over a rows x cols row-major buffer. Two passes
+  // per row for numerical stability: subtract the row max before exp (shift-invariant,
+  // prevents overflow), then divide by the row sum. Writes a NEW registry tensor.
   inline int softmax(int x_id, int rows, int cols) {
     const std::vector<float>& x = tensors.at(x_id);
     std::vector<float> y(x.size());
@@ -153,21 +162,22 @@ namespace jabla {
       const float* xr = x.data() + r * cols;
       float* yr = y.data() + r * cols;
 
-      float row_max = *std::max_element(xr, xr + cols); 
-      float row_sum = 0.0f; 
+      float row_max = *std::max_element(xr, xr + cols);
+      float row_sum = 0.0f;
 
-      // Subtract row max from exp(value), sum results
+      // exp(value - row max), accumulating the row sum in the same pass
       for (int c = 0; c < cols; ++c) {
         yr[c] = std::exp(xr[c] - row_max);
         row_sum += yr[c];
       }
-      for (int c = 0; c < cols; ++c)  yr[c] /= row_sum;
+      for (int c = 0; c < cols; ++c) yr[c] /= row_sum;
     }
     return create_tensor(std::move(y));
   }
 
-  // s_id = softmax tensor
-  // dy_id = grad out tensor
+  // softmax_backward: the coupled softmax vjp. Takes s = the FORWARD OUTPUT (not x)
+  // and the upstream dy; per row dx = s * (dy - rowdot), where rowdot = dot(dy, s).
+  // Every output in a row depends on every input, so the vjp is a row reduction.
   inline int softmax_backward(int s_id, int dy_id, int rows, int cols) {
     const std::vector<float>& s = tensors.at(s_id);
     const std::vector<float>& dy = tensors.at(dy_id);
