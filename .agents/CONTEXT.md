@@ -59,6 +59,10 @@ not multiple tapes. Full decision + the staged eager→lazy→fused→backend ro
   is load-bearing: a `(defn matmul)` would shadow a global C++ `matmul` (jank emits
   unqualified calls), but a qualified call can't be shadowed. So both sides keep
   natural names. Full rule + the lazy-stdlib gotchas in `docs/jank-notes.md`.
+- **C++ naming = snake_case (settled 2026-06-11):** `create_tensor`, `get_tensor`,
+  `softmax_backward`, etc., to read continuously with the STL the kernels lean on.
+  Collision-safety is the namespace (above), not the case, so it's purely stylistic;
+  the jank side keeps kebab-case. (`_` survives jank munging unchanged.)
 - C++ tested with doctest (`make cpp-test`); header syntax via `make cpp-check`;
   `make check` (= ASCII + lint + cpp-check) runs in the pre-commit hook.
 

@@ -324,7 +324,7 @@
 
 ;; gelu: tanh-approx GELU. Reference values from PyTorch F.gelu(., approximate='tanh'):
 ;; gelu(0)=0, gelu(1)~0.8412, gelu(-1)~-0.1588. The forward check pins it to PyTorch;
-;; the grad-check validates geluBackward = d(gelu)/dx numerically against the forward.
+;; the grad-check validates gelu_backward = d(gelu)/dx numerically against the forward.
 (deftest gelu-forward
   (testing "gelu (tanh approx) matches known values"
     (let [c (tt/->vectors (tt/gelu (tt/->tensor [[0.0 1.0] [-1.0 2.0]])))]
@@ -360,7 +360,7 @@
 
 ;; relu: elementwise max(0, x). vjp: dx = grad * (x > 0). Same shape as gelu (an
 ;; input-dependent elementwise mask) -- low marginal learning after gelu, but quick.
-;; C++: a relu kernel + reluBackward (dy * (x>0)). GOTCHA: relu is non-differentiable
+;; C++: a relu kernel + relu_backward (dy * (x>0)). GOTCHA: relu is non-differentiable
 ;; at x=0 -- keep 0 out of the grad-check inputs (a finite diff across the kink is wrong).
 (deftest relu-forward
   (testing "relu = max(0, x)"
@@ -377,7 +377,7 @@
 ;; softmax: row-wise exp(x - rowmax) / sum (subtract the row max -- same result, avoids
 ;; overflow). The first COUPLED vjp (a row's outputs all depend on each other): with
 ;; s = softmax(x),   dx_i = s_i (dy_i - sum_j dy_j s_j)   [dx = s * (dy - rowdot)].
-;; C++: a softmax kernel + softmaxBackward (it's a row reduction too -- needs s and dy).
+;; C++: a softmax kernel + softmax_backward (it's a row reduction too -- needs s and dy).
 ;;
 ;; GRAD-CHECK GOTCHA (reductions): tensor-grad-check uses sum(output) as the objective.
 ;; But each softmax row SUMS TO 1, so sum(softmax(x)) is constant (= #rows) -> gradient

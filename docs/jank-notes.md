@@ -60,9 +60,10 @@ https://github.com/jank-lang/jank/blob/main/compiler+runtime/doc/build.md
   the same name shadows the C++ function in the generated TU.
   - *Invariant:* the C++ name as written in `cpp/…` must not be byte-identical to
     any in-scope jank var's munged name. jank munges Clojure-style (`-` -> `_`,
-    case preserved), so a "C++ camelCase / jank kebab" convention avoids the clash
-    for *compound* names (`matMul` vs munged `mat_mul`). It does NOT save *single*
-    words -- `add` == `add`, no hump to differentiate.
+    case preserved), so a case-based "C++ camelCase / jank kebab" convention would
+    avoid the clash for *compound* names (`matMul` vs munged `mat_mul`) but NOT
+    *single* words -- `add` == `add`, no hump to differentiate. That insufficiency
+    is why we don't rely on case at all -- the namespace fix below covers everything.
   - *Cleanest fix (covers single words too):* put the C++ symbols in a namespace
     and call them qualified -- `namespace jabla { int matmul(...); }` +
     `(cpp/jabla.matmul …)` -> `jabla::matmul(...)`. A qualified call can't be
@@ -71,6 +72,13 @@ https://github.com/jank-lang/jank/blob/main/compiler+runtime/doc/build.md
     `addTensors` -- also work; the namespace is just uniform.) This works because
     `cpp/<ns>.<fn>` emits a qualified call (like `cpp/std.sqrt`); verified
     2026-06-05 on the devbox -- the whole tensor interop path now runs through it.
+  - *C++ naming style (settled 2026-06-11): snake_case* (`create_tensor`,
+    `softmax_backward`), matching the STL the kernels lean on (`std::vector`,
+    `max_element`, `push_back`) so our code reads continuously with it. The case
+    style is now purely a readability choice, NOT collision avoidance -- the
+    namespace qualification above is what guarantees safety. jank calls them
+    `cpp/jabla.create_tensor` (the `_` passes through munging unchanged, so there's
+    no ambiguity); the jank side keeps its own kebab-case convention.
 - **Parts of the lazy stdlib are unimplemented or fragile (verified 2026-06-05).**
   `rseq` is a stub that throws `"TODO: port rseq"`. Lazy `partition` blew up with a
   native `invalid sequence: …` when its result was realized. These surfaced while

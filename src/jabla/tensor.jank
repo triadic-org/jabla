@@ -62,7 +62,7 @@
   persistent vector to std::vector, but not a lazy seq.)"
   [v]
   (let [shape (shape-of v)
-        t-id  (cpp/jabla.createTensor (-> v flatten vec))]
+        t-id  (cpp/jabla.create_tensor (-> v flatten vec))]
     {:shape  shape
      :dtype  DEFAULT_DTYPE
      :id     t-id
@@ -108,7 +108,7 @@
   flat buffer from C++ by :id, then reshape it to the tensor's shape. This is
   core.matrix's to-nested-vectors -- the inverse of ->tensor."
   [t]
-  (let [raw-v (-> t :id cpp/jabla.getTensor)]
+  (let [raw-v (-> t :id cpp/jabla.get_tensor)]
     (reshape raw-v (get-shape t))))
 
 ;; --- Op model: every op is forward + vjp, recorded on the DAG ---------------
@@ -193,7 +193,7 @@
 
 (defn gelu
   "GELU activation (tanh approximation), the public forward op tagged :gelu over [t].
-  vjp: dx = grad-out * gelu'(x) via the fused geluBackward kernel."
+  vjp: dx = grad-out * gelu'(x) via the fused gelu_backward kernel."
   [t]
   (->node
    {:shape (get-shape t) :dtype (get-dtype t) :id (cpp/jabla.gelu (:id t))}
@@ -201,10 +201,10 @@
    [t]))
 
 (defn- gelu-backward-raw
-  "Fused gelu vjp: dx = grad-out * gelu'(x), via cpp/jabla.geluBackward. Bare tensor."
+  "Fused gelu vjp: dx = grad-out * gelu'(x), via cpp/jabla.gelu_backward. Bare tensor."
   [x grad-out]
   {:shape (get-shape x) :dtype (get-dtype x)
-   :id (cpp/jabla.geluBackward (:id x) (:id grad-out))})
+   :id (cpp/jabla.gelu_backward (:id x) (:id grad-out))})
 
 (defn- relu-raw
   [t]
@@ -218,7 +218,7 @@
   [x grad-out]
   {:shape (get-shape x)
    :dtype (get-dtype x)
-   :id (cpp/jabla.reluBackward (:id x) (:id grad-out))})
+   :id (cpp/jabla.relu_backward (:id x) (:id grad-out))})
 
 (defn softmax
   [t]
@@ -233,7 +233,7 @@
   (let [[rows cols :as shape] (get-shape node)] 
    {:shape shape
     :dtype (get-dtype node)
-    :id (cpp/jabla.softmaxBackward (:id node) (:id grad-out) rows cols)}))
+    :id (cpp/jabla.softmax_backward (:id node) (:id grad-out) rows cols)}))
 
 ;; TODO(you): the remaining GPT op set, each = forward (records its node) + a vjp
 ;; rule, validated vs PyTorch: relu, softmax, layernorm, embedding, cross-entropy.

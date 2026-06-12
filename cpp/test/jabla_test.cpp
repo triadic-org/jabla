@@ -10,31 +10,31 @@
 
 using namespace jabla;
 
-TEST_CASE("createTensor stores data, getTensor returns it unchanged") {
-  clearTensors();
-  int a = createTensor({1.0f, 2.0f, 3.0f, 4.0f});
-  auto v = getTensor(a);
+TEST_CASE("create_tensor stores data, get_tensor returns it unchanged") {
+  clear_tensors();
+  int a = create_tensor({1.0f, 2.0f, 3.0f, 4.0f});
+  auto v = get_tensor(a);
   CHECK(v.size() == 4);
   CHECK(v[0] == 1.0f);
   CHECK(v[3] == 4.0f);
 }
 
 TEST_CASE("distinct tensors get distinct ids") {
-  clearTensors();
-  int a = createTensor({1.0f, 2.0f});
-  int b = createTensor({5.0f, 6.0f, 7.0f});
+  clear_tensors();
+  int a = create_tensor({1.0f, 2.0f});
+  int b = create_tensor({5.0f, 6.0f, 7.0f});
   CHECK(a != b);
-  CHECK(getTensor(b).size() == 3);
+  CHECK(get_tensor(b).size() == 3);
 }
 
 TEST_CASE("clear empties the registry; ids restart") {
-  clearTensors();
+  clear_tensors();
   CHECK(tensors.empty());
-  CHECK(createTensor({9.0f}) == 0);
+  CHECK(create_tensor({9.0f}) == 0);
 }
 
 // --- matmul (links OpenBLAS via cblas_sgemm) --------------------------------
-// Contract under test: matmul(aIdx, bIdx, m, n, k, transA, transB) multiplies
+// Contract under test: matmul(a_id, b_id, m, n, k, trans_a, trans_b) multiplies
 // op(a) (m x k) . op(b) (k x n) via cblas_sgemm -- op(x) is x or its transpose per
 // the flags -- stores the m x n result as a NEW registry tensor, returns its id
 // (stays native, no marshalling out). m, n, k are the OPERATION dims (post-transpose).
@@ -42,14 +42,14 @@ TEST_CASE("clear empties the registry; ids restart") {
 // transposed cases below exercise the leading-dim math the matmul vjp relies on.
 
 TEST_CASE("matmul: (2x3)(3x2) = (2x2), no transpose") {
-  clearTensors();
-  int a = createTensor({1.0f, 2.0f, 3.0f,
+  clear_tensors();
+  int a = create_tensor({1.0f, 2.0f, 3.0f,
                         4.0f, 5.0f, 6.0f});      // 2x3, row-major
-  int b = createTensor({7.0f,  8.0f,
+  int b = create_tensor({7.0f,  8.0f,
                         9.0f,  10.0f,
                         11.0f, 12.0f});          // 3x2, row-major
   int c = matmul(a, b, 2, 2, 3, false, false);   // m=2, n=2, k=3 (cblas M,N,K)
-  auto v = getTensor(c);                         // matmul returns the result id
+  auto v = get_tensor(c);                         // matmul returns the result id
 
   REQUIRE(v.size() == 4);
   CHECK(v[0] == doctest::Approx(58.0f));    // [0,0] = 1*7 + 2*9  + 3*11
@@ -58,18 +58,18 @@ TEST_CASE("matmul: (2x3)(3x2) = (2x2), no transpose") {
   CHECK(v[3] == doctest::Approx(154.0f));   // [1,1] = 4*8 + 5*10 + 6*12
 }
 
-// transB: the dA = dY . Bt shape from the matmul vjp. With Y = A.B for A(2x3) B(3x4),
+// trans_b: the dA = dY . Bt shape from the matmul vjp. With Y = A.B for A(2x3) B(3x4),
 // dY is 2x4 and dA = dY . Bt is (2x4)(4x3) = 2x3. Here dY plays "a" (no trans), B
-// plays "b" with transB=true; m=2, n=3, k=4. Oracle: dY . (B transposed by hand).
-TEST_CASE("matmul: transB reads b transposed in place (dY . Bt)") {
-  clearTensors();
-  int dy = createTensor({1.0f, 2.0f, 3.0f, 4.0f,
+// plays "b" with trans_b=true; m=2, n=3, k=4. Oracle: dY . (B transposed by hand).
+TEST_CASE("matmul: trans_b reads b transposed in place (dY . Bt)") {
+  clear_tensors();
+  int dy = create_tensor({1.0f, 2.0f, 3.0f, 4.0f,
                          5.0f, 6.0f, 7.0f, 8.0f});         // 2x4
-  int b  = createTensor({1.0f, 2.0f, 3.0f, 4.0f,
+  int b  = create_tensor({1.0f, 2.0f, 3.0f, 4.0f,
                          5.0f, 6.0f, 7.0f, 8.0f,
                          9.0f, 10.0f, 11.0f, 12.0f});      // 3x4 (so Bt is 4x3)
   int c = matmul(dy, b, 2, 3, 4, false, true);            // (2x4)(4x3) = 2x3
-  auto v = getTensor(c);
+  auto v = get_tensor(c);
 
   REQUIRE(v.size() == 6);
   // row 0 of dY . Bt: dot([1,2,3,4], each row of B)
@@ -79,16 +79,16 @@ TEST_CASE("matmul: transB reads b transposed in place (dY . Bt)") {
   CHECK(v[5] == doctest::Approx(278.0f));   // [1,2] = 5*9+6*10+7*11+8*12
 }
 
-// transA: the dB = At . dY shape from the matmul vjp. For A(2x3) B(3x4), dB = At . dY
-// is (3x2)(2x4) = 3x4. Here A plays "a" with transA=true, dY plays "b"; m=3, n=4, k=2.
-TEST_CASE("matmul: transA reads a transposed in place (At . dY)") {
-  clearTensors();
-  int a  = createTensor({1.0f, 2.0f, 3.0f,
+// trans_a: the dB = At . dY shape from the matmul vjp. For A(2x3) B(3x4), dB = At . dY
+// is (3x2)(2x4) = 3x4. Here A plays "a" with trans_a=true, dY plays "b"; m=3, n=4, k=2.
+TEST_CASE("matmul: trans_a reads a transposed in place (At . dY)") {
+  clear_tensors();
+  int a  = create_tensor({1.0f, 2.0f, 3.0f,
                          4.0f, 5.0f, 6.0f});               // 2x3 (so At is 3x2)
-  int dy = createTensor({1.0f, 2.0f, 3.0f, 4.0f,
+  int dy = create_tensor({1.0f, 2.0f, 3.0f, 4.0f,
                          5.0f, 6.0f, 7.0f, 8.0f});         // 2x4
   int c = matmul(a, dy, 3, 4, 2, true, false);            // (3x2)(2x4) = 3x4
-  auto v = getTensor(c);
+  auto v = get_tensor(c);
 
   REQUIRE(v.size() == 12);
   // At col j is A col j; row 0 of At is A's col 0 = [1,4]; dot with dY cols
@@ -98,25 +98,25 @@ TEST_CASE("matmul: transA reads a transposed in place (At . dY)") {
 }
 
 TEST_CASE("matmul leaves its inputs untouched (no aliasing)") {
-  clearTensors();
-  int a = createTensor({1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f});
-  int b = createTensor({7.0f, 8.0f, 9.0f, 10.0f, 11.0f, 12.0f});
+  clear_tensors();
+  int a = create_tensor({1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f});
+  int b = create_tensor({7.0f, 8.0f, 9.0f, 10.0f, 11.0f, 12.0f});
   matmul(a, b, 2, 2, 3, false, false);
-  CHECK(getTensor(a) == std::vector<float>{1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f});
-  CHECK(getTensor(b) == std::vector<float>{7.0f, 8.0f, 9.0f, 10.0f, 11.0f, 12.0f});
+  CHECK(get_tensor(a) == std::vector<float>{1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f});
+  CHECK(get_tensor(b) == std::vector<float>{7.0f, 8.0f, 9.0f, 10.0f, 11.0f, 12.0f});
 }
 
 // --- add (elementwise; no BLAS) ---------------------------------------------
-// Contract under test: add(aIdx, bIdx) sums the two registry buffers elementwise
+// Contract under test: add(a_id, b_id) sums the two registry buffers elementwise
 // (same length), stores the result as a NEW registry tensor, returns its id.
 // RED until you implement add in jabla.hpp.
 
 TEST_CASE("add: elementwise (2x2)+(2x2)") {
-  clearTensors();
-  int a = createTensor({1.0f, 2.0f, 3.0f, 4.0f});
-  int b = createTensor({10.0f, 20.0f, 30.0f, 40.0f});
+  clear_tensors();
+  int a = create_tensor({1.0f, 2.0f, 3.0f, 4.0f});
+  int b = create_tensor({10.0f, 20.0f, 30.0f, 40.0f});
   int c = add(a, b);
-  auto v = getTensor(c);
+  auto v = get_tensor(c);
 
   REQUIRE(v.size() == 4);
   CHECK(v[0] == doctest::Approx(11.0f));
@@ -126,20 +126,20 @@ TEST_CASE("add: elementwise (2x2)+(2x2)") {
 }
 
 TEST_CASE("add leaves its inputs untouched (no aliasing)") {
-  clearTensors();
-  int a = createTensor({1.0f, 2.0f, 3.0f, 4.0f});
-  int b = createTensor({10.0f, 20.0f, 30.0f, 40.0f});
+  clear_tensors();
+  int a = create_tensor({1.0f, 2.0f, 3.0f, 4.0f});
+  int b = create_tensor({10.0f, 20.0f, 30.0f, 40.0f});
   add(a, b);
-  CHECK(getTensor(a) == std::vector<float>{1.0f, 2.0f, 3.0f, 4.0f});
-  CHECK(getTensor(b) == std::vector<float>{10.0f, 20.0f, 30.0f, 40.0f});
+  CHECK(get_tensor(a) == std::vector<float>{1.0f, 2.0f, 3.0f, 4.0f});
+  CHECK(get_tensor(b) == std::vector<float>{10.0f, 20.0f, 30.0f, 40.0f});
 }
 
 // --- mul (elementwise Hadamard; no BLAS) ------------------------------------
 TEST_CASE("mul: elementwise (2x2) * (2x2)") {
-  clearTensors();
-  int a = createTensor({1.0f, 2.0f, 3.0f, 4.0f});
-  int b = createTensor({5.0f, 6.0f, 7.0f, 8.0f});
-  auto v = getTensor(mul(a, b));
+  clear_tensors();
+  int a = create_tensor({1.0f, 2.0f, 3.0f, 4.0f});
+  int b = create_tensor({5.0f, 6.0f, 7.0f, 8.0f});
+  auto v = get_tensor(mul(a, b));
   REQUIRE(v.size() == 4);
   CHECK(v[0] == doctest::Approx(5.0f));     // 1*5
   CHECK(v[1] == doctest::Approx(12.0f));    // 2*6
@@ -148,35 +148,35 @@ TEST_CASE("mul: elementwise (2x2) * (2x2)") {
 
 // --- gelu (tanh approximation) + its fused backward -------------------------
 // Reference values: PyTorch F.gelu(., approximate='tanh'): gelu(1)~0.8412,
-// gelu(-1)~-0.1588, gelu(0)=0. gelu'(0) = 0.5 (so geluBackward(0, dy) = 0.5*dy).
+// gelu(-1)~-0.1588, gelu(0)=0. gelu'(0) = 0.5 (so gelu_backward(0, dy) = 0.5*dy).
 TEST_CASE("gelu: tanh-approx known values") {
-  clearTensors();
-  int x = createTensor({0.0f, 1.0f, -1.0f, 2.0f});
-  auto v = getTensor(gelu(x));
+  clear_tensors();
+  int x = create_tensor({0.0f, 1.0f, -1.0f, 2.0f});
+  auto v = get_tensor(gelu(x));
   REQUIRE(v.size() == 4);
   CHECK(v[0] == doctest::Approx(0.0f));
   CHECK(v[1] == doctest::Approx(0.8412f).epsilon(0.01));
   CHECK(v[2] == doctest::Approx(-0.1588f).epsilon(0.01));
 }
 
-TEST_CASE("geluBackward = dy * gelu'(x); gelu'(0) = 0.5") {
-  clearTensors();
-  int x  = createTensor({0.0f});
-  int dy = createTensor({2.0f});
-  auto v = getTensor(geluBackward(x, dy));
+TEST_CASE("gelu_backward = dy * gelu'(x); gelu'(0) = 0.5") {
+  clear_tensors();
+  int x  = create_tensor({0.0f});
+  int dy = create_tensor({2.0f});
+  auto v = get_tensor(gelu_backward(x, dy));
   REQUIRE(v.size() == 1);
   CHECK(v[0] == doctest::Approx(1.0f));    // 2.0 * gelu'(0)=0.5
 }
 
 // --- relu (elementwise max(0, x)) + its backward ----------------------------
-// Contract: relu(xId) applies max(0, x) elementwise, stores a NEW registry tensor,
-// returns its id. reluBackward(xId, dyId) is the vjp -- dx = dy * (x > 0), the
+// Contract: relu(x_id) applies max(0, x) elementwise, stores a NEW registry tensor,
+// returns its id. relu_backward(x_id, dy_id) is the vjp -- dx = dy * (x > 0), the
 // subgradient with the kink mapped to 0 (relu'(0) := 0; the jank grad-check keeps
 // zeros out of its inputs so this choice never shows up there).
 TEST_CASE("relu: max(0, x) elementwise, including negatives and zero") {
-  clearTensors();
-  int x = createTensor({-1.0f, 2.0f, 0.0f, 3.0f});
-  auto v = getTensor(relu(x));
+  clear_tensors();
+  int x = create_tensor({-1.0f, 2.0f, 0.0f, 3.0f});
+  auto v = get_tensor(relu(x));
   REQUIRE(v.size() == 4);
   CHECK(v[0] == doctest::Approx(0.0f));    // negative clamps to 0
   CHECK(v[1] == doctest::Approx(2.0f));    // positive passes through
@@ -185,20 +185,20 @@ TEST_CASE("relu: max(0, x) elementwise, including negatives and zero") {
 }
 
 TEST_CASE("relu leaves its input untouched (no aliasing)") {
-  clearTensors();
-  int x = createTensor({-1.0f, 2.0f, 0.0f, 3.0f});
+  clear_tensors();
+  int x = create_tensor({-1.0f, 2.0f, 0.0f, 3.0f});
   relu(x);
-  CHECK(getTensor(x) == std::vector<float>{-1.0f, 2.0f, 0.0f, 3.0f});
+  CHECK(get_tensor(x) == std::vector<float>{-1.0f, 2.0f, 0.0f, 3.0f});
 }
 
-// Uncomment once reluBackward(xId, dyId) lands. dx = dy * (x > 0): the gradient
+// Uncomment once relu_backward(x_id, dy_id) lands. dx = dy * (x > 0): the gradient
 // passes through where x is positive and is killed where x is negative; at x = 0
 // the subgradient is 0 (relu'(0) := 0).
-TEST_CASE("reluBackward = dy * (x > 0); kink at 0 maps to 0") {
-  clearTensors();
-  int x  = createTensor({-1.0f, 2.0f, 0.0f, 3.0f});
-  int dy = createTensor({10.0f, 10.0f, 10.0f, 10.0f});
-  auto v = getTensor(reluBackward(x, dy));
+TEST_CASE("relu_backward = dy * (x > 0); kink at 0 maps to 0") {
+  clear_tensors();
+  int x  = create_tensor({-1.0f, 2.0f, 0.0f, 3.0f});
+  int dy = create_tensor({10.0f, 10.0f, 10.0f, 10.0f});
+  auto v = get_tensor(relu_backward(x, dy));
   REQUIRE(v.size() == 4);
   CHECK(v[0] == doctest::Approx(0.0f));     // x<0 -> grad killed
   CHECK(v[1] == doctest::Approx(10.0f));    // x>0 -> grad passes
@@ -209,19 +209,19 @@ TEST_CASE("reluBackward = dy * (x > 0); kink at 0 maps to 0") {
 // --- softmax (row-wise) + its coupled backward ------------------------------
 // The first op whose backward is NOT elementwise: every output in a row depends on
 // every input in that row, so the vjp is a row reduction, not a diagonal scale.
-// Contract: softmax(xId, rows, cols) treats the buffer as rows x cols row-major and
+// Contract: softmax(x_id, rows, cols) treats the buffer as rows x cols row-major and
 // applies softmax along each row (subtract the row max first for numerical stability,
-// then exp / rowsum). softmaxBackward(sId, dyId, rows, cols) takes the FORWARD OUTPUT
+// then exp / rowsum). softmax_backward(s_id, dy_id, rows, cols) takes the FORWARD OUTPUT
 // s (not x) and the upstream dy, and returns dx_i = s_i (dy_i - sum_j dy_j s_j) --
 // i.e. dx = s * (dy - rowdot), where rowdot is the per-row dot(dy, s) broadcast.
 // (Signature shown as (id, rows, cols); adapt if you carry shape differently.)
 //
-// Uncomment once softmax + softmaxBackward land in jabla.hpp. Reference values are
+// Uncomment once softmax + softmax_backward land in jabla.hpp. Reference values are
 // PyTorch's softmax([1,2,3]) = [.0900, .2447, .6652].
 TEST_CASE("softmax: row sums to 1; reference softmax([1,2,3])") {
-  clearTensors();
-  int x = createTensor({1.0f, 2.0f, 3.0f});       // 1 row x 3 cols
-  auto v = getTensor(softmax(x, 1, 3));
+  clear_tensors();
+  int x = create_tensor({1.0f, 2.0f, 3.0f});       // 1 row x 3 cols
+  auto v = get_tensor(softmax(x, 1, 3));
   REQUIRE(v.size() == 3);
   CHECK(v[0] + v[1] + v[2] == doctest::Approx(1.0f));   // normalized
   CHECK(v[0] == doctest::Approx(0.0900f).epsilon(0.01));
@@ -233,9 +233,9 @@ TEST_CASE("softmax: row sums to 1; reference softmax([1,2,3])") {
 // subtraction is what prevents exp() overflow. This is the test that catches a
 // kernel that forgot to subtract the max.
 TEST_CASE("softmax: shift-invariant (row-max subtraction prevents overflow)") {
-  clearTensors();
-  int x = createTensor({1001.0f, 1002.0f, 1003.0f});
-  auto v = getTensor(softmax(x, 1, 3));
+  clear_tensors();
+  int x = create_tensor({1001.0f, 1002.0f, 1003.0f});
+  auto v = get_tensor(softmax(x, 1, 3));
   REQUIRE(v.size() == 3);
   CHECK(v[0] == doctest::Approx(0.0900f).epsilon(0.01));
   CHECK(v[2] == doctest::Approx(0.6652f).epsilon(0.01));
@@ -243,10 +243,10 @@ TEST_CASE("softmax: shift-invariant (row-max subtraction prevents overflow)") {
 
 // Two rows at once: confirms the reduction is PER ROW, not over the whole buffer.
 TEST_CASE("softmax: independent per row") {
-  clearTensors();
-  int x = createTensor({1.0f, 2.0f, 3.0f,
+  clear_tensors();
+  int x = create_tensor({1.0f, 2.0f, 3.0f,
                         3.0f, 2.0f, 1.0f});         // 2 rows x 3 cols
-  auto v = getTensor(softmax(x, 2, 3));
+  auto v = get_tensor(softmax(x, 2, 3));
   REQUIRE(v.size() == 6);
   CHECK(v[0] + v[1] + v[2] == doctest::Approx(1.0f));
   CHECK(v[3] + v[4] + v[5] == doctest::Approx(1.0f));
@@ -259,11 +259,11 @@ TEST_CASE("softmax: independent per row") {
 // //   dx1 = .2447 * (0 - .0900) = -.0220
 // //   dx2 = .6652 * (0 - .0900) = -.0599
 // // (Note it takes s, the forward output, not x -- the kernel saves a recompute.)
-TEST_CASE("softmaxBackward = s * (dy - rowdot(dy, s))") {
-  clearTensors();
-  int s  = createTensor({0.0900f, 0.2447f, 0.6652f});  // a softmax row
-  int dy = createTensor({1.0f, 0.0f, 0.0f});
-  auto v = getTensor(softmaxBackward(s, dy, 1, 3));
+TEST_CASE("softmax_backward = s * (dy - rowdot(dy, s))") {
+  clear_tensors();
+  int s  = create_tensor({0.0900f, 0.2447f, 0.6652f});  // a softmax row
+  int dy = create_tensor({1.0f, 0.0f, 0.0f});
+  auto v = get_tensor(softmax_backward(s, dy, 1, 3));
   REQUIRE(v.size() == 3);
   CHECK(v[0] == doctest::Approx(0.0819f).epsilon(0.02));
   CHECK(v[1] == doctest::Approx(-0.0220f).epsilon(0.02));
