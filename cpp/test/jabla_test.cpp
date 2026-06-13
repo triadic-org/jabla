@@ -269,3 +269,142 @@ TEST_CASE("softmax_backward = s * (dy - rowdot(dy, s))") {
   CHECK(v[1] == doctest::Approx(-0.0220f).epsilon(0.02));
   CHECK(v[2] == doctest::Approx(-0.0599f).epsilon(0.02));
 }
+
+// --- cross_entropy (softmax + NLL, fused) -----------------------------------
+// Contract: cross_entropy(logits_id, targets, rows, cols) treats the buffer as
+// rows x cols logits, and returns a 1-ELEMENT registry tensor holding the MEAN over
+// rows of -log(softmax(logits_r)[targets_r]). `targets` is one integer class index
+// per row (NOT differentiable). Fuse the softmax (subtract the row max) for stability.
+// cross_entropy_backward(logits_id, targets, rows, cols) returns dlogits (rows x cols)
+//   = (softmax(logits) - onehot(targets)) / rows  -- the clean fused gradient.
+// (Signatures pass targets as std::vector<int>; adapt if you carry them another way --
+// e.g. a float registry tensor cast to int. The forward op must thread `targets` onto
+// its node so the vjp can reach them, since they aren't a tensor input.)
+//
+// Sequencing note: cross_entropy gates the trainable GPT (Step 4), not the attention
+// block -- do softmax + layernorm first (see docs sequencing). Depends on softmax.
+//
+// Uncomment once cross_entropy / cross_entropy_backward land. Reference:
+// softmax([1,2,3]) = [.0900, .2447, .6652]; target 2 -> loss = -log(.6652) ~ 0.4076.
+// TEST_CASE("cross_entropy: -log(softmax[target]), one row") {
+//   clear_tensors();
+//   int logits = create_tensor({1.0f, 2.0f, 3.0f});       // 1 row x 3 cols
+//   auto v = get_tensor(cross_entropy(logits, {2}, 1, 3));
+//   REQUIRE(v.size() == 1);
+//   CHECK(v[0] == doctest::Approx(0.4076f).epsilon(0.01));
+// }
+//
+// // Two rows -> the loss is the MEAN (catches a sum-instead-of-mean bug). Same logits
+// // both rows; target 2 -> -log(.6652)=0.4076, target 0 -> -log(.0900)=2.4076.
+// // mean = (0.4076 + 2.4076) / 2 = 1.4076.
+// TEST_CASE("cross_entropy: averages the per-row losses") {
+//   clear_tensors();
+//   int logits = create_tensor({1.0f, 2.0f, 3.0f,
+//                               1.0f, 2.0f, 3.0f});        // 2 rows x 3 cols
+//   auto v = get_tensor(cross_entropy(logits, {2, 0}, 2, 3));
+//   REQUIRE(v.size() == 1);
+//   CHECK(v[0] == doctest::Approx(1.4076f).epsilon(0.01));
+// }
+//
+// // Backward oracle: one row [1,2,3], target 2, N=1. softmax=[.0900,.2447,.6652],
+// // onehot=[0,0,1]. dlogits = (softmax - onehot)/1 = [.0900, .2447, -.3348].
+// // (The gradient pushes the true-class logit down and the rest up -- note it sums
+// // to ~0, since softmax and onehot each sum to 1.)
+// TEST_CASE("cross_entropy_backward = (softmax - onehot)/N") {
+//   clear_tensors();
+//   int logits = create_tensor({1.0f, 2.0f, 3.0f});
+//   auto v = get_tensor(cross_entropy_backward(logits, {2}, 1, 3));
+//   REQUIRE(v.size() == 3);
+//   CHECK(v[0] == doctest::Approx(0.0900f).epsilon(0.01));
+//   CHECK(v[1] == doctest::Approx(0.2447f).epsilon(0.01));
+//   CHECK(v[2] == doctest::Approx(-0.3348f).epsilon(0.01));
+// }
+
+// --- layernorm (per-row normalize + affine) ---------------------------------
+// Contract: layernorm(x_id, gamma_id, beta_id, rows, cols) normalizes each row, then
+// applies a per-column affine:
+//   mu  = mean(row), var = mean((row-mu)^2)   [population, 1/N -- matches PyTorch]
+//   norm = (x - mu) / sqrt(var + eps)         [eps ~ 1e-5]
+//   out  = gamma * norm + beta                [gamma, beta length cols]
+// Save mu and rstd = 1/sqrt(var+eps) per row for the backward. The vjp returns grads
+// for x, gamma, beta; dgamma/dbeta are simple column reductions, but dx COUPLES through
+// mu and var (a row reduction). How the three grads come back (one kernel vs several,
+// some computed in jank) is your design choice -- the forward tests below are the
+// high-value part; the coupled dx is best validated by the jank finite-diff grad-check.
+//
+// Uncomment once layernorm lands. Reference: layernorm([1,2,3], g=1, b=0):
+// mu=2, var=(1+0+1)/3=0.6667, std~0.8165 -> norm = [-1.2247, 0, 1.2247].
+// TEST_CASE("layernorm: zero-mean per row, normalized values (g=1, b=0)") {
+//   clear_tensors();
+//   int x = create_tensor({1.0f, 2.0f, 3.0f});            // 1 row x 3 cols
+//   int g = create_tensor({1.0f, 1.0f, 1.0f});
+//   int b = create_tensor({0.0f, 0.0f, 0.0f});
+//   auto v = get_tensor(layernorm(x, g, b, 1, 3));
+//   REQUIRE(v.size() == 3);
+//   CHECK(v[0] + v[1] + v[2] == doctest::Approx(0.0f).epsilon(0.01));  // zero mean
+//   CHECK(v[0] == doctest::Approx(-1.2247f).epsilon(0.01));
+//   CHECK(v[1] == doctest::Approx(0.0f).epsilon(0.01));
+//   CHECK(v[2] == doctest::Approx(1.2247f).epsilon(0.01));
+// }
+//
+// // affine: gamma scales, beta shifts -> out = gamma*norm + beta.
+// // g=2, b=1: out = [2*-1.2247+1, 1, 2*1.2247+1] = [-1.4495, 1, 3.4495].
+// TEST_CASE("layernorm: affine gamma*norm + beta") {
+//   clear_tensors();
+//   int x = create_tensor({1.0f, 2.0f, 3.0f});
+//   int g = create_tensor({2.0f, 2.0f, 2.0f});
+//   int b = create_tensor({1.0f, 1.0f, 1.0f});
+//   auto v = get_tensor(layernorm(x, g, b, 1, 3));
+//   REQUIRE(v.size() == 3);
+//   CHECK(v[0] == doctest::Approx(-1.4495f).epsilon(0.01));
+//   CHECK(v[1] == doctest::Approx(1.0f).epsilon(0.01));
+//   CHECK(v[2] == doctest::Approx(3.4495f).epsilon(0.01));
+// }
+//
+// // Backward oracle (the tractable parts). x=[1,2,3], g=1, b=0, dy=[1,1,1]:
+// //   norm   = [-1.2247, 0, 1.2247]
+// //   dbeta  = column-sum of dy            = [1, 1, 1]
+// //   dgamma = column-sum of dy * norm     = [-1.2247, 0, 1.2247]
+// //   dx ~ [0, 0, 0]  -- UNIFORM dy is the vacuous case: sum(norm)=0 identically, so
+// //                      the x-grad of a uniform-weighted sum vanishes (same reduction
+// //                      invariance softmax has). Real dx (non-uniform dy) is covered
+// //                      by the jank weighted-output grad-check. Wire these to whatever
+// //                      backward signature you choose.
+
+// --- embedding (gather rows by index) ---------------------------------------
+// Contract: embedding(w_id, indices, dim) gathers rows of W (vocab x dim) by integer
+// indices: out[i] = W[indices[i]], shape (len(indices) x dim). embedding_backward(
+// dy_id, indices, vocab, dim) SCATTER-ADDS the upstream grad back: for each i,
+// dW[indices[i]] += dy[i], ACCUMULATING when an index repeats (same sum-on-reuse as
+// weight tying). Returns dW (vocab x dim). Indices are NOT differentiable -- only W
+// gets a gradient. (indices as std::vector<int>; adapt at the boundary as needed.)
+//
+// Uncomment once embedding / embedding_backward land. Reference forward:
+// W = [[1,2],[3,4],[5,6]] (vocab 3, dim 2); embedding(W, [2,0]) = [[5,6],[1,2]].
+// TEST_CASE("embedding: gathers W rows by index") {
+//   clear_tensors();
+//   int w = create_tensor({1.0f, 2.0f,
+//                          3.0f, 4.0f,
+//                          5.0f, 6.0f});                   // vocab 3 x dim 2
+//   auto v = get_tensor(embedding(w, {2, 0}, 2));          // rows 2 then 0
+//   REQUIRE(v.size() == 4);
+//   CHECK(v[0] == doctest::Approx(5.0f));  CHECK(v[1] == doctest::Approx(6.0f));
+//   CHECK(v[2] == doctest::Approx(1.0f));  CHECK(v[3] == doctest::Approx(2.0f));
+// }
+//
+// // Backward oracle -- the scatter-add WITH a repeat (the part that's easy to get
+// // wrong). indices [0,0,1], dy all-ones (3 rows x 2 cols), vocab 3:
+// //   dW[0] += dy[0] + dy[1] = [2,2]   (index 0 used twice -> SUMS)
+// //   dW[1] += dy[2]         = [1,1]
+// //   dW[2]   untouched      = [0,0]
+// TEST_CASE("embedding_backward: scatter-add accumulates on repeated index") {
+//   clear_tensors();
+//   int dy = create_tensor({1.0f, 1.0f,
+//                           1.0f, 1.0f,
+//                           1.0f, 1.0f});                  // 3 rows x 2 cols
+//   auto v = get_tensor(embedding_backward(dy, {0, 0, 1}, 3, 2));
+//   REQUIRE(v.size() == 6);
+//   CHECK(v[0] == doctest::Approx(2.0f));  CHECK(v[1] == doctest::Approx(2.0f));
+//   CHECK(v[2] == doctest::Approx(1.0f));  CHECK(v[3] == doctest::Approx(1.0f));
+//   CHECK(v[4] == doctest::Approx(0.0f));  CHECK(v[5] == doctest::Approx(0.0f));
+// }
