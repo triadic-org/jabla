@@ -406,15 +406,13 @@
 ;; gotcha: the output is already a scalar loss, so sum(output) is non-trivial in logits.
 (deftest cross-entropy-forward
   (testing "CE([[1 2 3]], target 2) = -log(softmax[2]) ~ -log(0.6652) ~ 0.4076"
-    ;; (is (tu/approx? 0.4076 (tu/tensor-sum (tt/cross-entropy (tt/->tensor [[1.0 2.0 3.0]])
-    ;;                                                          [2])) 1e-3))
-    (is true)))
+    (is (tu/approx? 0.4076 (tu/tensor-sum (tt/cross-entropy (tt/->tensor [[1.0 2.0 3.0]])
+                                                            [2])) 1e-3))))
 
 (deftest cross-entropy-backward
   (testing "cross-entropy gradients vs finite differences (logits only)"
-    ;; (is (tu/tensor-grad-check (fn [[logits]] (tt/cross-entropy logits [2]))
-    ;;                           [[[1.0 2.0 3.0]]]))
-    (is true)))
+    (is (tu/tensor-grad-check (fn [[logits]] (tt/cross-entropy logits [2]))
+                              [[[1.0 2.0 3.0]]]))))
 
 ;; layernorm: per row, normalize then affine. mu = mean(x), var = mean((x-mu)^2)
 ;; (population, 1/N -- matches PyTorch), norm = (x - mu)/sqrt(var + eps), out =
@@ -424,22 +422,20 @@
 ;; backward) + layernormBackward. Same weighted-sum grad-check gotcha as softmax.
 (deftest layernorm-forward
   (testing "layernorm([1,2,3], g=1, b=0): ~0 mean, normalized = [-1.2247 0 1.2247]"
-    ;; (let [g (tt/->tensor [[1.0 1.0 1.0]]) b (tt/->tensor [[0.0 0.0 0.0]])
-    ;;       c (tt/->vectors (tt/layernorm (tt/->tensor [[1.0 2.0 3.0]]) g b))]
-    ;;   (is (tu/approx? 0.0 (+ (get-in c [0 0]) (get-in c [0 1]) (get-in c [0 2])) 1e-5))
-    ;;   (is (tu/approx? -1.2247 (get-in c [0 0]) 1e-3))
-    ;;   (is (tu/approx?  1.2247 (get-in c [0 2]) 1e-3)))
-    (is true)))
+    (let [g (tt/->tensor [[1.0 1.0 1.0]]) b (tt/->tensor [[0.0 0.0 0.0]])
+          c (tt/->vectors (tt/layernorm (tt/->tensor [[1.0 2.0 3.0]]) g b))]
+      (is (tu/approx? 0.0 (+ (get-in c [0 0]) (get-in c [0 1]) (get-in c [0 2])) 1e-5))
+      (is (tu/approx? -1.2247 (get-in c [0 0]) 1e-3))
+      (is (tu/approx?  1.2247 (get-in c [0 2]) 1e-3)))))
 
 (deftest layernorm-backward
   (testing "layernorm gradients vs finite differences (weighted-sum; checks x/gamma/beta)"
-    ;; (let [w (tt/->tensor [[0.3 0.5 0.2]])]
-    ;;   (is (tu/tensor-grad-check
-    ;;        (fn [[x g b]] (tt/mul (tt/layernorm x g b) w))
-    ;;        [[[1.0 2.0 3.0]]      ; x
-    ;;         [[1.0 1.0 1.0]]      ; gamma
-    ;;         [[0.0 0.0 0.0]]])))  ; beta
-    (is true)))
+    (let [w (tt/->tensor [[0.3 0.5 0.2]])]
+      (is (tu/tensor-grad-check
+           (fn [[x g b]] (tt/mul (tt/layernorm x g b) w))
+           [[[1.0 2.0 3.0]]       ; x
+            [[1.0 1.0 1.0]]       ; gamma
+            [[0.0 0.0 0.0]]])))))  ; beta
 
 ;; embedding: gather rows of a weight matrix W (vocab x dim) by integer indices.
 ;; forward: out[i] = W[idx[i]]. vjp: SCATTER-ADD -- dW[idx[i]] += dY[i], ACCUMULATING
@@ -449,17 +445,20 @@
 ;; but idx are ints). Check dW directly with a hand oracle instead.
 (deftest embedding-forward
   (testing "embedding gathers W rows by index"
-    ;; (let [w (tt/->tensor [[1.0 2.0] [3.0 4.0] [5.0 6.0]])   ; vocab 3, dim 2
-    ;;       c (tt/->vectors (tt/embedding w [2 0]))]          ; rows 2 then 0
-    ;;   (is (= [[5.0 6.0] [1.0 2.0]] c)))
-    (is true)))
+    (let [w (tt/->tensor [[1.0 2.0] [3.0 4.0] [5.0 6.0]])   ; vocab 3, dim 2
+          c (tt/->vectors (tt/embedding w [2 0]))]          ; rows 2 then 0
+      (is (= [[5.0 6.0] [1.0 2.0]] c)))))
 
 (deftest embedding-backward
   (testing "embedding scatter-add: dW accumulates dY into used rows (repeats sum)"
-    ;; Hand oracle (not tensor-grad-check): idx [0 0 1], dY all-ones (3 rows x 2 cols) ->
-    ;; dW row 0 = [2 2] (index 0 used twice), row 1 = [1 1], row 2 = [0 0]. Build the
-    ;; embedding, backward! from a sum, read (tt/get-grad grads w), compare to that.
-    (is true)))
+    ;; Hand oracle (not tensor-grad-check -- idx are ints, non-diff): idx [0 0 1], and
+    ;; backward! seeds ones (3 rows x 2 cols) as dY -> dW row 0 = [2 2] (index 0 used
+    ;; twice, SUMS), row 1 = [1 1], row 2 = [0 0].
+    (let [w     (tt/->tensor [[1.0 2.0] [3.0 4.0] [5.0 6.0]])
+          e     (tt/embedding w [0 0 1])
+          grads (tt/backward! e)
+          dw    (tt/->vectors (tt/get-grad grads w))]
+      (is (= [[2.0 2.0] [1.0 1.0] [0.0 0.0]] dw)))))
 
 ;; --- Stage 5+ (later): a detach op (GAN / actor-critic), then assemble one attention
 ;; block element-wise vs PyTorch (the Step 3 validator). The lazy-realize / fusion /

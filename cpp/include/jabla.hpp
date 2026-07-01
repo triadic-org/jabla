@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cblas.h>
 #include <cmath>
+#include <numeric>
 #include <vector>
 
 // Native backend for jabla.tensor: the buffer registry plus the ops (matmul,
@@ -195,6 +196,182 @@ namespace jabla {
       for (int c = 0; c < cols; ++c) dxr[c] = sr[c] * (dyr[c] - dot);
     }
     return create_tensor(std::move(dx));
+  }
+
+  // layernorm kernel: per row, out = gamma*norm + beta where norm = (x-mu)/sqrt(var+eps),
+  // mu/var are the population (1/N -- matches PyTorch) mean/variance of the row, eps=1e-5.
+  // gamma/beta are per-COLUMN (length cols), shared across rows -- indexed by c, NOT
+  // row-offset like x/y. Two stat passes (mean, then variance) + one output pass.
+  inline int layernorm(int x_id, int gamma_id, int beta_id, int rows, int cols) {
+    const std::vector<float>& x = tensors.at(x_id);
+    const std::vector<float>& gamma = tensors.at(gamma_id);
+    const std::vector<float>& beta = tensors.at(beta_id);
+    const float eps = 1e-5f;
+    std::vector<float> y(x.size());
+
+    for (int r = 0; r < rows; ++r) {
+      const float* xr = x.data() + r * cols;
+      float* yr = y.data() + r * cols;
+
+      float mu = std::accumulate(xr, xr + cols, 0.0f) / cols;
+      float var = 0.0f;
+      for (int c = 0; c < cols; ++c) { float d = xr[c] - mu; var += d * d; }
+      var /= cols;
+      float rstd = 1.0f / std::sqrt(var + eps);
+
+      for (int c = 0; c < cols; ++c)
+        yr[c] = gamma[c] * ((xr[c] - mu) * rstd) + beta[c];
+    }
+    return create_tensor(std::move(y));
+  }
+
+  // layernorm_backward: the coupled x-gradient. Recomputes mu/rstd/norm from x. With
+  // g = gamma*dy (the affine folded into the upstream grad), per row:
+  //   dx = rstd * (g - mean(g) - norm * mean(g*norm)).
+  inline int layernorm_backward(int x_id, int gamma_id, int dy_id, int rows, int cols) {
+    const std::vector<float>& x = tensors.at(x_id);
+    const std::vector<float>& gamma = tensors.at(gamma_id);
+    const std::vector<float>& dy = tensors.at(dy_id);
+    const float eps = 1e-5f;
+    std::vector<float> dx(x.size());
+
+    for (int r = 0; r < rows; ++r) {
+      const float* xr = x.data() + r * cols;
+      const float* dyr = dy.data() + r * cols;
+      float* dxr = dx.data() + r * cols;
+
+      float mu = std::accumulate(xr, xr + cols, 0.0f) / cols;
+      float var = 0.0f;
+      for (int c = 0; c < cols; ++c) { float d = xr[c] - mu; var += d * d; }
+      var /= cols;
+      float rstd = 1.0f / std::sqrt(var + eps);
+
+      float g_mean = 0.0f, gn_mean = 0.0f;
+      for (int c = 0; c < cols; ++c) {
+        float norm = (xr[c] - mu) * rstd;
+        float g = gamma[c] * dyr[c];
+        g_mean += g;
+        gn_mean += g * norm;
+      }
+      g_mean /= cols;
+      gn_mean /= cols;
+
+      for (int c = 0; c < cols; ++c) {
+        float norm = (xr[c] - mu) * rstd;
+        float g = gamma[c] * dyr[c];
+        dxr[c] = rstd * (g - g_mean - norm * gn_mean);
+      }
+    }
+    return create_tensor(std::move(dx));
+  }
+
+  // layernorm_gamma_grad: dgamma[c] = sum over rows of dy * norm (recomputes norm from
+  // x). Length cols -- a column reduction (axis 0).
+  inline int layernorm_gamma_grad(int x_id, int dy_id, int rows, int cols) {
+    const std::vector<float>& x = tensors.at(x_id);
+    const std::vector<float>& dy = tensors.at(dy_id);
+    const float eps = 1e-5f;
+    std::vector<float> dgamma(cols, 0.0f);
+
+    for (int r = 0; r < rows; ++r) {
+      const float* xr = x.data() + r * cols;
+      const float* dyr = dy.data() + r * cols;
+
+      float mu = std::accumulate(xr, xr + cols, 0.0f) / cols;
+      float var = 0.0f;
+      for (int c = 0; c < cols; ++c) { float d = xr[c] - mu; var += d * d; }
+      var /= cols;
+      float rstd = 1.0f / std::sqrt(var + eps);
+
+      for (int c = 0; c < cols; ++c) dgamma[c] += dyr[c] * ((xr[c] - mu) * rstd);
+    }
+    return create_tensor(std::move(dgamma));
+  }
+
+  // layernorm_beta_grad: dbeta[c] = sum over rows of dy. Length cols.
+  inline int layernorm_beta_grad(int dy_id, int rows, int cols) {
+    const std::vector<float>& dy = tensors.at(dy_id);
+    std::vector<float> dbeta(cols, 0.0f);
+
+    for (int r = 0; r < rows; ++r) {
+      const float* dyr = dy.data() + r * cols;
+      for (int c = 0; c < cols; ++c) dbeta[c] += dyr[c];
+    }
+    return create_tensor(std::move(dbeta));
+  }
+
+  // cross_entropy kernel: mean over rows of -log(softmax(logits_r)[targets_r]). The
+  // softmax is fused (subtract row max) for stability. `targets` is one class index
+  // per row, passed as float and cast to int (reuses the create_tensor marshaling
+  // path). Returns a 1-element registry tensor (the scalar loss).
+  inline int cross_entropy(int logits_id, std::vector<float> targets, int rows, int cols) {
+    const std::vector<float>& logits = tensors.at(logits_id);
+    float loss = 0.0f;
+
+    for (int r = 0; r < rows; ++r) {
+      const float* lr = logits.data() + r * cols;
+      float row_max = *std::max_element(lr, lr + cols);
+      float sum = 0.0f;
+      for (int c = 0; c < cols; ++c) sum += std::exp(lr[c] - row_max);
+      int t = static_cast<int>(targets[r]);
+      // -log(softmax[t]) = log(sum) - (logit_t - row_max)
+      loss += std::log(sum) - (lr[t] - row_max);
+    }
+    return create_tensor(std::vector<float>{loss / rows});
+  }
+
+  // cross_entropy_backward: dlogits = (softmax(logits) - onehot(targets)) / rows -- the
+  // clean fused gradient. Assumes the loss is the backward ROOT (seeded with 1), the
+  // only way a scalar loss is used, so it does not scale by an upstream grad.
+  inline int cross_entropy_backward(int logits_id, std::vector<float> targets, int rows, int cols) {
+    const std::vector<float>& logits = tensors.at(logits_id);
+    std::vector<float> dx(logits.size());
+
+    for (int r = 0; r < rows; ++r) {
+      const float* lr = logits.data() + r * cols;
+      float* dr = dx.data() + r * cols;
+      float row_max = *std::max_element(lr, lr + cols);
+      float sum = 0.0f;
+      for (int c = 0; c < cols; ++c) { dr[c] = std::exp(lr[c] - row_max); sum += dr[c]; }
+      for (int c = 0; c < cols; ++c) dr[c] /= sum;          // dr = softmax
+      int t = static_cast<int>(targets[r]);
+      dr[t] -= 1.0f;                                         // - onehot
+      for (int c = 0; c < cols; ++c) dr[c] /= rows;         // / N (mean)
+    }
+    return create_tensor(std::move(dx));
+  }
+
+  // embedding kernel: gather rows of W (vocab x dim) by integer index. out[i] =
+  // W[indices[i]], shape (len(indices) x dim). indices passed as float, cast to int.
+  inline int embedding(int w_id, std::vector<float> indices, int dim) {
+    const std::vector<float>& w = tensors.at(w_id);
+    int n = static_cast<int>(indices.size());
+    std::vector<float> out(n * dim);
+
+    for (int i = 0; i < n; ++i) {
+      int idx = static_cast<int>(indices[i]);
+      const float* wr = w.data() + idx * dim;
+      float* orow = out.data() + i * dim;
+      for (int d = 0; d < dim; ++d) orow[d] = wr[d];
+    }
+    return create_tensor(std::move(out));
+  }
+
+  // embedding_backward: scatter-add the upstream grad back into a (vocab x dim) dW:
+  // dW[indices[i]] += dy[i], ACCUMULATING when an index repeats (sum-on-reuse, like
+  // weight tying). Indices are not differentiable -- only W gets a gradient.
+  inline int embedding_backward(int dy_id, std::vector<float> indices, int vocab, int dim) {
+    const std::vector<float>& dy = tensors.at(dy_id);
+    int n = static_cast<int>(indices.size());
+    std::vector<float> dw(vocab * dim, 0.0f);
+
+    for (int i = 0; i < n; ++i) {
+      int idx = static_cast<int>(indices[i]);
+      const float* dyr = dy.data() + i * dim;
+      float* dwr = dw.data() + idx * dim;
+      for (int d = 0; d < dim; ++d) dwr[d] += dyr[d];
+    }
+    return create_tensor(std::move(dw));
   }
 
 } // namespace jabla

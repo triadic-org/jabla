@@ -244,9 +244,83 @@
      :dtype (get-dtype node)
      :id (cpp/jabla.softmax_backward (:id node) (:id grad-out) rows cols)}))
 
-;; TODO(you): the remaining GPT op set, each = forward (records its node) + a vjp
-;; rule, validated vs PyTorch: relu, softmax, layernorm, embedding, cross-entropy.
-;; (mul + gelu done.)
+(defn layernorm
+  "Layer normalization: per row, norm = (x - mu)/sqrt(var + eps), then the per-column
+  affine gamma*norm + beta. Public forward op tagged :layernorm over [x gamma beta].
+  vjp returns [dx dgamma dbeta]: dx couples through mu/var (a row reduction); dgamma/dbeta
+  are column reductions (each its own native kernel)."
+  [x gamma beta]
+  (let [[rows cols :as shape] (get-shape x)]
+    (->node
+     {:shape shape :dtype (get-dtype x)
+      :id (cpp/jabla.layernorm (:id x) (:id gamma) (:id beta) rows cols)}
+     :layernorm
+     [x gamma beta])))
+
+(defn- layernorm-backward-raw
+  "layernorm dx (the coupled row reduction), via cpp/jabla.layernorm_backward -- folds
+  gamma into the upstream grad and recomputes mu/rstd from x. Bare tensor."
+  [x gamma grad-out]
+  (let [[rows cols :as shape] (get-shape x)]
+    {:shape shape :dtype (get-dtype x)
+     :id (cpp/jabla.layernorm_backward (:id x) (:id gamma) (:id grad-out) rows cols)}))
+
+(defn- layernorm-gamma-grad-raw
+  "layernorm dgamma = column-sum of grad-out * norm, via cpp/jabla.layernorm_gamma_grad.
+  Bare tensor with gamma's shape (a per-column vector)."
+  [x gamma grad-out]
+  (let [[rows cols] (get-shape x)]
+    {:shape (get-shape gamma) :dtype (get-dtype gamma)
+     :id (cpp/jabla.layernorm_gamma_grad (:id x) (:id grad-out) rows cols)}))
+
+(defn- layernorm-beta-grad-raw
+  "layernorm dbeta = column-sum of grad-out, via cpp/jabla.layernorm_beta_grad. Bare
+  tensor with beta's shape."
+  [x beta grad-out]
+  (let [[rows cols] (get-shape x)]
+    {:shape (get-shape beta) :dtype (get-dtype beta)
+     :id (cpp/jabla.layernorm_beta_grad (:id grad-out) rows cols)}))
+
+(defn cross-entropy
+  "Cross-entropy loss (softmax + NLL, fused): mean over rows of -log(softmax(logits)[t]).
+  `targets` is one class index per row -- a plain jank vector, NOT a tensor (non-diff), so
+  it's stashed on the node for the vjp rather than being an :input. Returns a 1-element
+  scalar loss tensor tagged :cross-entropy over [logits].
+  vjp: dlogits = (softmax(logits) - onehot(targets)) / rows."
+  [logits targets]
+  (let [[rows cols] (get-shape logits)
+        loss-id (cpp/jabla.cross_entropy (:id logits) (mapv double targets) rows cols)]
+    (assoc (->node {:shape [1] :dtype (get-dtype logits) :id loss-id}
+                   :cross-entropy [logits])
+           :targets targets)))
+
+(defn- cross-entropy-backward-raw
+  "cross-entropy vjp: dlogits = (softmax(logits) - onehot(targets)) / rows, via
+  cpp/jabla.cross_entropy_backward. Bare tensor -- shape of logits."
+  [logits targets]
+  (let [[rows cols :as shape] (get-shape logits)]
+    {:shape shape :dtype (get-dtype logits)
+     :id (cpp/jabla.cross_entropy_backward (:id logits) (mapv double targets) rows cols)}))
+
+(defn embedding
+  "Embedding lookup: gather rows of W (vocab x dim) by integer index. `idx` is a plain
+  jank vector of indices (non-diff), stashed on the node for the vjp. Public forward op
+  tagged :embedding over [w]; output shape (count idx) x dim.
+  vjp: scatter-add dW[idx[i]] += grad-out[i] (sum-on-reuse when an index repeats)."
+  [w idx]
+  (let [[_vocab dim] (get-shape w)
+        out-id (cpp/jabla.embedding (:id w) (mapv double idx) dim)]
+    (assoc (->node {:shape [(count idx) dim] :dtype (get-dtype w) :id out-id}
+                   :embedding [w])
+           :indices idx)))
+
+(defn- embedding-backward-raw
+  "embedding vjp: scatter-add grad-out into a (vocab x dim) dW at the used indices, via
+  cpp/jabla.embedding_backward. Bare tensor -- W's shape (only W gets a gradient)."
+  [w idx grad-out]
+  (let [[vocab dim :as shape] (get-shape w)]
+    {:shape shape :dtype (get-dtype w)
+     :id (cpp/jabla.embedding_backward (:id grad-out) (mapv double idx) vocab dim)}))
 
 ;; --- Backward (stage 1 -- done) ----------------------------------------------
 ;; Three pieces: the vjp-rules registry (op -> backward rule), backward! (walk the
@@ -264,9 +338,10 @@
   per entry in (:inputs node), to be accumulated into those inputs. Adjust the
   signature to taste -- it's the seam, not a mandate.
 
-  Wired: :add (straight through), :matmul (dA = grad-out . Bt, dB = At . grad-out via
-  transposed matmul-raws), :mul (dA = grad-out * b, dB = grad-out * a), :gelu (dx =
-  grad-out * gelu'(x), fused). TODO(you): the rest of the op set as each forward lands."
+  Wired: :add, :matmul, :mul, :gelu, :relu, :softmax (coupled row reduction), :layernorm
+  ([dx dgamma dbeta]), :cross-entropy (terminal loss -- ignores grad-out, reads :targets
+  off the node), :embedding (scatter-add, reads :indices off the node). The GPT op set
+  is complete; batched/N-D matmul + a causal mask remain for the attention block."
   {:add (fn [_ grad-out] [grad-out grad-out])
 
    :matmul (fn [node grad-out]
@@ -289,6 +364,23 @@
 
    :softmax (fn [node grad-out]
               [(softmax-backward-raw node grad-out)])  ; one input (the logits)
+
+   :layernorm (fn [node grad-out]
+                (let [[x gamma beta] (:inputs node)]
+                  [(layernorm-backward-raw x gamma grad-out)     ; dx (coupled)
+                   (layernorm-gamma-grad-raw x gamma grad-out)   ; dgamma
+                   (layernorm-beta-grad-raw x beta grad-out)]))  ; dbeta
+
+   ;; targets are non-diff -- read from the node (stashed by the forward), not :inputs.
+   ;; grad-out is ignored: cross-entropy is a terminal loss (the backward root, seeded 1).
+   :cross-entropy (fn [node _grad-out]
+                    (let [[logits] (:inputs node)]
+                      [(cross-entropy-backward-raw logits (:targets node))]))
+
+   ;; indices are non-diff (read from the node); only W gets a grad (scatter-add).
+   :embedding (fn [node grad-out]
+                (let [[w] (:inputs node)]
+                  [(embedding-backward-raw w (:indices node) grad-out)]))
    })
 
 (defn ones-from-shape
